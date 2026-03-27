@@ -19,6 +19,9 @@ export interface _SERVICE {
   'acceptRide' : ActorMethod<[string, string], boolean>,
   'approveRide' : ActorMethod<[string, string], boolean>,
   'assignCallerUserRole' : ActorMethod<[Principal, UserRole], undefined>,
+  'checkGhostChannel' : ActorMethod<[string], string>,
+  'closeGhostChannel' : ActorMethod<[string, string], boolean>,
+  'createGhostChannel' : ActorMethod<[string, string], boolean>,
   'createRideRequest' : ActorMethod<
     [string, string, string, boolean],
     [string, string]
@@ -27,6 +30,10 @@ export interface _SERVICE {
   'endSession' : ActorMethod<[string], boolean>,
   'getCallerUserProfile' : ActorMethod<[], [] | [UserProfile]>,
   'getCallerUserRole' : ActorMethod<[], UserRole>,
+  'getGhostMessages' : ActorMethod<
+    [string, string, bigint],
+    Array<[string, string, bigint]>
+  >,
   'getMessages' : ActorMethod<
     [string, string],
     Array<[string, string, bigint]>
@@ -35,11 +42,13 @@ export interface _SERVICE {
   'getUserProfile' : ActorMethod<[Principal], [] | [UserProfile]>,
   'heartbeatQuery' : ActorMethod<[], undefined>,
   'isCallerAdmin' : ActorMethod<[], boolean>,
+  'joinGhostChannel' : ActorMethod<[string, string], string>,
   'listAvailableRides' : ActorMethod<
     [],
     Array<[string, string, boolean, string, bigint, bigint, bigint, string]>
   >,
   'saveCallerUserProfile' : ActorMethod<[UserProfile], undefined>,
+  'sendGhostMessage' : ActorMethod<[string, string, string], boolean>,
   'sendMessage' : ActorMethod<[string, string, string], boolean>,
   'submitRating' : ActorMethod<[string, string, bigint], boolean>,
   'updateRideStatus' : ActorMethod<[string, string, string], boolean>,

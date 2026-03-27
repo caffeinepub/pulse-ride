@@ -20,6 +20,9 @@ export const idlService = IDL.Service({
   'acceptRide' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
   'approveRide' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
   'assignCallerUserRole' : IDL.Func([IDL.Principal, UserRole], [], []),
+  'checkGhostChannel' : IDL.Func([IDL.Text], [IDL.Text], ['query']),
+  'closeGhostChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
+  'createGhostChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
   'createRideRequest' : IDL.Func(
       [IDL.Text, IDL.Text, IDL.Text, IDL.Bool],
       [IDL.Text, IDL.Text],
@@ -29,6 +32,11 @@ export const idlService = IDL.Service({
   'endSession' : IDL.Func([IDL.Text], [IDL.Bool], []),
   'getCallerUserProfile' : IDL.Func([], [IDL.Opt(UserProfile)], ['query']),
   'getCallerUserRole' : IDL.Func([], [UserRole], ['query']),
+  'getGhostMessages' : IDL.Func(
+      [IDL.Text, IDL.Text, IDL.Nat],
+      [IDL.Vec(IDL.Tuple(IDL.Text, IDL.Text, IDL.Nat))],
+      ['query'],
+    ),
   'getMessages' : IDL.Func(
       [IDL.Text, IDL.Text],
       [IDL.Vec(IDL.Tuple(IDL.Text, IDL.Text, IDL.Int))],
@@ -42,6 +50,7 @@ export const idlService = IDL.Service({
     ),
   'heartbeatQuery' : IDL.Func([], [], ['query']),
   'isCallerAdmin' : IDL.Func([], [IDL.Bool], ['query']),
+  'joinGhostChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Text], []),
   'listAvailableRides' : IDL.Func(
       [],
       [
@@ -61,6 +70,7 @@ export const idlService = IDL.Service({
       ['query'],
     ),
   'saveCallerUserProfile' : IDL.Func([UserProfile], [], []),
+  'sendGhostMessage' : IDL.Func([IDL.Text, IDL.Text, IDL.Text], [IDL.Bool], []),
   'sendMessage' : IDL.Func([IDL.Text, IDL.Text, IDL.Text], [IDL.Bool], []),
   'submitRating' : IDL.Func([IDL.Text, IDL.Text, IDL.Nat], [IDL.Bool], []),
   'updateRideStatus' : IDL.Func([IDL.Text, IDL.Text, IDL.Text], [IDL.Bool], []),
@@ -81,6 +91,9 @@ export const idlFactory = ({ IDL }) => {
     'acceptRide' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
     'approveRide' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
     'assignCallerUserRole' : IDL.Func([IDL.Principal, UserRole], [], []),
+    'checkGhostChannel' : IDL.Func([IDL.Text], [IDL.Text], ['query']),
+    'closeGhostChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
+    'createGhostChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
     'createRideRequest' : IDL.Func(
         [IDL.Text, IDL.Text, IDL.Text, IDL.Bool],
         [IDL.Text, IDL.Text],
@@ -90,6 +103,11 @@ export const idlFactory = ({ IDL }) => {
     'endSession' : IDL.Func([IDL.Text], [IDL.Bool], []),
     'getCallerUserProfile' : IDL.Func([], [IDL.Opt(UserProfile)], ['query']),
     'getCallerUserRole' : IDL.Func([], [UserRole], ['query']),
+    'getGhostMessages' : IDL.Func(
+        [IDL.Text, IDL.Text, IDL.Nat],
+        [IDL.Vec(IDL.Tuple(IDL.Text, IDL.Text, IDL.Nat))],
+        ['query'],
+      ),
     'getMessages' : IDL.Func(
         [IDL.Text, IDL.Text],
         [IDL.Vec(IDL.Tuple(IDL.Text, IDL.Text, IDL.Int))],
@@ -103,6 +121,7 @@ export const idlFactory = ({ IDL }) => {
       ),
     'heartbeatQuery' : IDL.Func([], [], ['query']),
     'isCallerAdmin' : IDL.Func([], [IDL.Bool], ['query']),
+    'joinGhostChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Text], []),
     'listAvailableRides' : IDL.Func(
         [],
         [
@@ -122,6 +141,11 @@ export const idlFactory = ({ IDL }) => {
         ['query'],
       ),
     'saveCallerUserProfile' : IDL.Func([UserProfile], [], []),
+    'sendGhostMessage' : IDL.Func(
+        [IDL.Text, IDL.Text, IDL.Text],
+        [IDL.Bool],
+        [],
+      ),
     'sendMessage' : IDL.Func([IDL.Text, IDL.Text, IDL.Text], [IDL.Bool], []),
     'submitRating' : IDL.Func([IDL.Text, IDL.Text, IDL.Nat], [IDL.Bool], []),
     'updateRideStatus' : IDL.Func(

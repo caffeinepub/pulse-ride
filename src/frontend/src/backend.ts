@@ -102,18 +102,24 @@ export interface backendInterface {
     acceptRide(rideId: string, driverSessionId: string): Promise<boolean>;
     approveRide(rideId: string, riderSessionId: string): Promise<boolean>;
     assignCallerUserRole(user: Principal, role: UserRole): Promise<void>;
+    checkGhostChannel(code: string): Promise<string>;
+    closeGhostChannel(code: string, sessionId: string): Promise<boolean>;
+    createGhostChannel(code: string, sessionId: string): Promise<boolean>;
     createRideRequest(riderSessionId: string, encryptedPickup: string, encryptedDropoff: string, phantomMode: boolean): Promise<[string, string]>;
     createSession(role: string): Promise<string>;
     endSession(sessionId: string): Promise<boolean>;
     getCallerUserProfile(): Promise<UserProfile | null>;
     getCallerUserRole(): Promise<UserRole>;
+    getGhostMessages(code: string, sessionId: string, afterIndex: bigint): Promise<Array<[string, string, bigint]>>;
     getMessages(rideId: string, requesterSessionId: string): Promise<Array<[string, string, bigint]>>;
     getReputation(sessionId: string): Promise<[string, bigint]>;
     getUserProfile(user: Principal): Promise<UserProfile | null>;
     heartbeatQuery(): Promise<void>;
     isCallerAdmin(): Promise<boolean>;
+    joinGhostChannel(code: string, sessionId: string): Promise<string>;
     listAvailableRides(): Promise<Array<[string, string, boolean, string, bigint, bigint, bigint, string]>>;
     saveCallerUserProfile(profile: UserProfile): Promise<void>;
+    sendGhostMessage(code: string, senderSessionId: string, encryptedText: string): Promise<boolean>;
     sendMessage(rideId: string, senderSessionId: string, encryptedText: string): Promise<boolean>;
     submitRating(rideId: string, raterSessionId: string, stars: bigint): Promise<boolean>;
     updateRideStatus(rideId: string, sessionId: string, newStatus: string): Promise<boolean>;
@@ -174,6 +180,48 @@ export class Backend implements backendInterface {
             }
         } else {
             const result = await this.actor.assignCallerUserRole(arg0, to_candid_UserRole_n1(this._uploadFile, this._downloadFile, arg1));
+            return result;
+        }
+    }
+    async checkGhostChannel(arg0: string): Promise<string> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.checkGhostChannel(arg0);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.checkGhostChannel(arg0);
+            return result;
+        }
+    }
+    async closeGhostChannel(arg0: string, arg1: string): Promise<boolean> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.closeGhostChannel(arg0, arg1);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.closeGhostChannel(arg0, arg1);
+            return result;
+        }
+    }
+    async createGhostChannel(arg0: string, arg1: string): Promise<boolean> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.createGhostChannel(arg0, arg1);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.createGhostChannel(arg0, arg1);
             return result;
         }
     }
@@ -253,6 +301,20 @@ export class Backend implements backendInterface {
             return from_candid_UserRole_n4(this._uploadFile, this._downloadFile, result);
         }
     }
+    async getGhostMessages(arg0: string, arg1: string, arg2: bigint): Promise<Array<[string, string, bigint]>> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.getGhostMessages(arg0, arg1, arg2);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.getGhostMessages(arg0, arg1, arg2);
+            return result;
+        }
+    }
     async getMessages(arg0: string, arg1: string): Promise<Array<[string, string, bigint]>> {
         if (this.processError) {
             try {
@@ -329,6 +391,20 @@ export class Backend implements backendInterface {
             return result;
         }
     }
+    async joinGhostChannel(arg0: string, arg1: string): Promise<string> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.joinGhostChannel(arg0, arg1);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.joinGhostChannel(arg0, arg1);
+            return result;
+        }
+    }
     async listAvailableRides(): Promise<Array<[string, string, boolean, string, bigint, bigint, bigint, string]>> {
         if (this.processError) {
             try {
@@ -354,6 +430,20 @@ export class Backend implements backendInterface {
             }
         } else {
             const result = await this.actor.saveCallerUserProfile(arg0);
+            return result;
+        }
+    }
+    async sendGhostMessage(arg0: string, arg1: string, arg2: string): Promise<boolean> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.sendGhostMessage(arg0, arg1, arg2);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.sendGhostMessage(arg0, arg1, arg2);
             return result;
         }
     }

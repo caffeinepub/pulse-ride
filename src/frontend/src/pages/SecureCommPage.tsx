@@ -1,3 +1,4 @@
+import type { backendInterface as FullBackendInterface } from "@/backend.d";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -7,6 +8,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { useActor } from "@/hooks/useActor";
 import {
   ArrowLeft,
   Copy,
@@ -54,7 +56,7 @@ const MOCK_PHRASES = [
   "Ghost protocol initiated. All patterns removed.",
 ];
 
-const REMOTE_PHRASES = [
+const _REMOTE_PHRASES = [
   "Ghost signal received. Encryption layer confirmed.",
   "Phantom route active. Zero trace protocol engaged.",
   "Identity mask applied. Voice signature scrubbed.",
@@ -128,6 +130,8 @@ function P2PGhostChannel({
   analyserRef: React.MutableRefObject<AnalyserNode | null>;
   isRecording: boolean;
 }) {
+  const { actor: _actor } = useActor();
+  const actor = _actor as unknown as FullBackendInterface | null;
   const [p2pState, setP2pState] = useState<P2PState>("idle");
   const [generatedCode, setGeneratedCode] = useState("");
   const [enterCodeInput, setEnterCodeInput] = useState("");
@@ -142,6 +146,9 @@ function P2PGhostChannel({
   const [showManualInput, setShowManualInput] = useState(false);
   const [manualElapsed, setManualElapsed] = useState(0);
   const [manualTimedOut, setManualTimedOut] = useState(false);
+  const [currentCode, setCurrentCode] = useState("");
+  const [connectError, setConnectError] = useState("");
+  const [sendInput, setSendInput] = useState("");
 
   const localWaveRef = useRef<HTMLCanvasElement>(null);
   const remoteWaveRef = useRef<HTMLCanvasElement>(null);
@@ -151,9 +158,10 @@ function P2PGhostChannel({
   const remotePhraseIdx = useRef(0);
   const remoteIdRef = useRef(0);
   const typewriterTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const manualPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const manualTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const manualElapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const connectionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const messagePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastMessageIndex = useRef<bigint>(0n);
+  const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Animate dots
   useEffect(() => {
@@ -162,60 +170,81 @@ function P2PGhostChannel({
     return () => clearInterval(t);
   }, [p2pState]);
 
-  // Manual code polling
+  // Manual code polling — backend-based
   useEffect(() => {
-    if (!manualWaiting || !manualCode) return;
-    const localUserId = "local"; // stable per component instance
-    const key = `p2p_shared_${manualCode}`;
-    // Register presence
-    try {
-      localStorage.setItem(
-        key,
-        JSON.stringify({ user: localUserId, ts: Date.now() }),
-      );
-    } catch {}
+    if (!manualWaiting || !manualCode || !actor) return;
 
-    manualPollRef.current = setInterval(() => {
+    let cancelled = false;
+
+    const tryConnect = async () => {
       try {
-        const raw = localStorage.getItem(key);
-        if (!raw) return;
-        const data = JSON.parse(raw);
-        if (data.user !== localUserId) {
-          // Another user is waiting — connect!
-          localStorage.removeItem(key);
-          clearInterval(manualPollRef.current!);
-          clearTimeout(manualTimeoutRef.current!);
-          clearInterval(manualElapsedRef.current!);
-          setManualWaiting(false);
-          handleConnect();
+        const created = await actor.createGhostChannel(manualCode, localId);
+        if (cancelled) return;
+        if (created) {
+          // We are first — poll checkGhostChannel
+          connectionPollRef.current = setInterval(async () => {
+            if (cancelled) return;
+            try {
+              const status = await actor.checkGhostChannel(manualCode);
+              if (status === "connected") {
+                clearPollRefs();
+                setCurrentCode(manualCode);
+                setManualWaiting(false);
+                handleConnect();
+              }
+            } catch {}
+          }, 2000);
+        } else {
+          // Channel exists — try to join
+          const result = await actor.joinGhostChannel(manualCode, localId);
+          if (cancelled) return;
+          if (result === "connected") {
+            clearPollRefs();
+            setCurrentCode(manualCode);
+            setManualWaiting(false);
+            handleConnect();
+          } else if (result === "waiting") {
+            // Poll join until connected
+            connectionPollRef.current = setInterval(async () => {
+              if (cancelled) return;
+              try {
+                const r = await actor.joinGhostChannel(manualCode, localId);
+                if (r === "connected") {
+                  clearPollRefs();
+                  setCurrentCode(manualCode);
+                  setManualWaiting(false);
+                  handleConnect();
+                }
+              } catch {}
+            }, 2000);
+          } else if (result === "not_found") {
+            setConnectError("Kod bulunamadı");
+            setManualWaiting(false);
+          }
         }
       } catch {}
-    }, 800);
+    };
 
-    manualElapsedRef.current = setInterval(() => {
-      setManualElapsed((e) => e + 1);
+    tryConnect();
+
+    elapsedTimerRef.current = setInterval(() => {
+      setManualElapsed((e) => {
+        if (e >= 119) {
+          clearPollRefs();
+          setManualWaiting(false);
+          setManualTimedOut(true);
+          setTimeout(() => setManualTimedOut(false), 4000);
+          return 0;
+        }
+        return e + 1;
+      });
     }, 1000);
 
-    manualTimeoutRef.current = setTimeout(() => {
-      clearInterval(manualPollRef.current!);
-      clearInterval(manualElapsedRef.current!);
-      try {
-        localStorage.removeItem(key);
-      } catch {}
-      setManualWaiting(false);
-      setManualTimedOut(true);
-      setTimeout(() => setManualTimedOut(false), 4000);
-    }, 120000);
-
     return () => {
-      clearInterval(manualPollRef.current!);
-      clearTimeout(manualTimeoutRef.current!);
-      clearInterval(manualElapsedRef.current!);
-      try {
-        localStorage.removeItem(key);
-      } catch {}
+      cancelled = true;
+      clearPollRefs();
     };
-  }, [manualWaiting, manualCode]);
+  }, [manualWaiting, manualCode, actor, localId]);
 
   // Auto return from disconnected
   useEffect(() => {
@@ -295,7 +324,7 @@ function P2PGhostChannel({
     remoteRafRef.current = requestAnimationFrame(drawRemoteWave);
   }, []);
 
-  // Start/stop waveform animations and remote feed
+  // Start/stop waveform animations and real message polling
   useEffect(() => {
     if (p2pState === "connected") {
       localRafRef.current = requestAnimationFrame(drawLocalWave);
@@ -320,41 +349,71 @@ function P2PGhostChannel({
         typewriterTimers.current.push(t);
       };
 
-      remoteTimerRef.current = setInterval(() => {
-        const phrase =
-          REMOTE_PHRASES[remotePhraseIdx.current % REMOTE_PHRASES.length];
-        remotePhraseIdx.current++;
-        const msgId = ++remoteIdRef.current;
-        setRemoteMessages((prev) => [
-          ...prev.slice(-19),
-          {
-            id: msgId,
-            ghostId: remoteId,
-            text: phrase,
-            displayText: "",
-            timestamp: getNow(),
-          },
-        ]);
-        typewrite(phrase, msgId);
-      }, 3500);
+      // Real message polling from backend
+      if (actor && currentCode) {
+        messagePollRef.current = setInterval(async () => {
+          try {
+            const msgs = await actor.getGhostMessages(
+              currentCode,
+              localId,
+              lastMessageIndex.current,
+            );
+            if (msgs.length === 0) return;
+            for (const [senderSessionId, encryptedText, index] of msgs) {
+              if (senderSessionId === localId) continue;
+              const msgId = ++remoteIdRef.current;
+              setRemoteMessages((prev) => [
+                ...prev.slice(-19),
+                {
+                  id: msgId,
+                  ghostId: senderSessionId,
+                  text: encryptedText,
+                  displayText: "",
+                  timestamp: getNow(),
+                },
+              ]);
+              typewrite(encryptedText, msgId);
+              if (index + 1n > lastMessageIndex.current) {
+                lastMessageIndex.current = index + 1n;
+              }
+            }
+          } catch {}
+        }, 2000);
+      }
 
       return () => {
         cancelAnimationFrame(localRafRef.current);
         cancelAnimationFrame(remoteRafRef.current);
-        if (remoteTimerRef.current) clearInterval(remoteTimerRef.current);
+        if (messagePollRef.current) {
+          clearInterval(messagePollRef.current);
+          messagePollRef.current = null;
+        }
         for (const t of typewriterTimers.current) clearTimeout(t);
         typewriterTimers.current = [];
       };
     }
-  }, [p2pState, drawLocalWave, drawRemoteWave, remoteId]);
+  }, [p2pState, drawLocalWave, drawRemoteWave, actor, currentCode, localId]);
+
+  const clearPollRefs = () => {
+    if (connectionPollRef.current) {
+      clearInterval(connectionPollRef.current);
+      connectionPollRef.current = null;
+    }
+    if (messagePollRef.current) {
+      clearInterval(messagePollRef.current);
+      messagePollRef.current = null;
+    }
+    if (elapsedTimerRef.current) {
+      clearInterval(elapsedTimerRef.current);
+      elapsedTimerRef.current = null;
+    }
+  };
 
   const cancelManual = () => {
-    clearInterval(manualPollRef.current!);
-    clearTimeout(manualTimeoutRef.current!);
-    clearInterval(manualElapsedRef.current!);
-    try {
-      if (manualCode) localStorage.removeItem(`p2p_shared_${manualCode}`);
-    } catch {}
+    clearPollRefs();
+    if (actor && manualCode) {
+      actor.closeGhostChannel(manualCode, localId).catch(() => {});
+    }
     setManualWaiting(false);
     setManualElapsed(0);
   };
@@ -368,11 +427,25 @@ function P2PGhostChannel({
     setManualWaiting(true);
   };
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
+    if (!actor) return;
     const code = generateGhostId();
     setGeneratedCode(code);
+    setCurrentCode(code);
     setCopied(false);
     setP2pState("waiting");
+    try {
+      await actor.createGhostChannel(code, localId);
+      connectionPollRef.current = setInterval(async () => {
+        try {
+          const status = await actor.checkGhostChannel(code);
+          if (status === "connected") {
+            clearPollRefs();
+            handleConnect();
+          }
+        } catch {}
+      }, 2000);
+    } catch {}
   };
 
   const handleCopy = () => {
@@ -385,6 +458,7 @@ function P2PGhostChannel({
     setRemoteMessages([]);
     remotePhraseIdx.current = 0;
     remoteIdRef.current = 0;
+    lastMessageIndex.current = 0n;
     setManualWaiting(false);
     setShowManualInput(false);
     setP2pState("connected");
@@ -394,12 +468,26 @@ function P2PGhostChannel({
     cancelAnimationFrame(localRafRef.current);
     cancelAnimationFrame(remoteRafRef.current);
     if (remoteTimerRef.current) clearInterval(remoteTimerRef.current);
+    clearPollRefs();
     for (const t of typewriterTimers.current) clearTimeout(t);
     typewriterTimers.current = [];
+    if (actor && currentCode) {
+      actor.closeGhostChannel(currentCode, localId).catch(() => {});
+    }
     setRemoteMessages([]);
     setShowEnterInput(false);
     setEnterCodeInput("");
+    setCurrentCode("");
     setP2pState("disconnected");
+  };
+
+  const handleSendMessage = async () => {
+    if (!actor || !currentCode || !sendInput.trim()) return;
+    const text = sendInput.trim();
+    setSendInput("");
+    try {
+      await actor.sendGhostMessage(currentCode, localId, text);
+    } catch {}
   };
 
   return (
@@ -530,8 +618,34 @@ function P2PGhostChannel({
                 />
                 <button
                   type="button"
-                  onClick={handleConnect}
-                  disabled={enterCodeInput.length < 5}
+                  onClick={async () => {
+                    if (!actor) return;
+                    const code = enterCodeInput.trim();
+                    setConnectError("");
+                    try {
+                      const result = await actor.joinGhostChannel(
+                        code,
+                        localId,
+                      );
+                      if (result === "connected") {
+                        setCurrentCode(code);
+                        handleConnect();
+                      } else if (result === "waiting") {
+                        setCurrentCode(code);
+                        setManualInput(code);
+                        setManualCode(code);
+                        setManualElapsed(0);
+                        setManualTimedOut(false);
+                        setShowEnterInput(false);
+                        setManualWaiting(true);
+                      } else {
+                        setConnectError("Kod bulunamadı veya kanal dolu");
+                      }
+                    } catch {
+                      setConnectError("Bağlantı hatası");
+                    }
+                  }}
+                  disabled={enterCodeInput.length < 5 || !actor}
                   className="px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-40"
                   style={{
                     background: "rgba(0,245,255,0.12)",
@@ -543,6 +657,14 @@ function P2PGhostChannel({
                   CONNECT
                 </button>
               </div>
+            )}
+            {connectError && (
+              <p
+                className="text-[10px] text-red-400 font-mono text-center animate-pulse"
+                data-ocid="p2p.error_state"
+              >
+                ⚠ {connectError}
+              </p>
             )}
 
             {/* MANUEL KOD button */}
@@ -572,8 +694,8 @@ function P2PGhostChannel({
             {showManualInput && (
               <div className="space-y-2">
                 <p className="text-[9px] text-orange-400/70 font-mono text-center">
-                  Aynı kodu iki kullanıcı girince otomatik bağlanır • Aynı
-                  cihazda veya aynı ağda çalışır
+                  Aynı kodu iki kullanıcı girince otomatik bağlanır • Farklı
+                  tarayıcılar ve cihazlar arasında çalışır
                 </p>
                 {manualTimedOut && (
                   <p className="text-[10px] text-red-400 font-mono text-center animate-pulse">
@@ -863,6 +985,39 @@ function P2PGhostChannel({
                   )}
                 </div>
               </ScrollArea>
+            </div>
+
+            {/* Send message input */}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={sendInput}
+                onChange={(e) => setSendInput(e.target.value)}
+                placeholder="Mesaj gönder..."
+                className="flex-1 bg-transparent font-mono text-xs text-cyan-300 placeholder:text-gray-600 px-3 py-2 rounded-lg outline-none"
+                style={{
+                  background: "rgba(0,0,0,0.4)",
+                  border: "1px solid rgba(0,245,255,0.25)",
+                }}
+                data-ocid="p2p.message.input"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSendMessage();
+                }}
+              />
+              <button
+                type="button"
+                onClick={handleSendMessage}
+                disabled={!sendInput.trim()}
+                className="px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-40"
+                style={{
+                  background: "rgba(0,245,255,0.12)",
+                  border: "1px solid rgba(0,245,255,0.5)",
+                  color: "#00f5ff",
+                }}
+                data-ocid="p2p.send.button"
+              >
+                GÖNDER
+              </button>
             </div>
 
             {/* Disconnect */}
