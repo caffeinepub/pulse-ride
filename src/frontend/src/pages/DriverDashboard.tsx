@@ -1,4 +1,5 @@
 import type { SessionState } from "@/App";
+import InRideGhostChat from "@/components/InRideGhostChat";
 import KarmicScore from "@/components/KarmicScore";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,7 +11,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { useActor } from "@/hooks/useActor";
-import { Ghost, Lock, LogOut, Navigation, Send, Star, Zap } from "lucide-react";
+import { Ghost, Lock, LogOut, Navigation, Star, Zap } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -104,12 +105,10 @@ export default function DriverDashboard({
   const [reputation, setReputation] = useState<[string, number] | null>(null);
   const [rides, setRides] = useState<AvailableRide[]>([]);
   const [activeRide, setActiveRide] = useState<AvailableRide | null>(null);
+  const [showGhostChat, setShowGhostChat] = useState(false);
   const [navStep, setNavStep] = useState(0);
   const [routeProgress, setRouteProgress] = useState(0);
-  const [messages, setMessages] = useState<
-    Array<{ sender: string; text: string }>
-  >([]);
-  const [chatInput, setChatInput] = useState("");
+
   const [pulseEvent, setPulseEvent] = useState<
     (typeof PULSE_EVENTS)[number] | null
   >(null);
@@ -181,20 +180,6 @@ export default function DriverDashboard({
   }, [actor, activeRide]);
 
   useEffect(() => {
-    if (!actor || !activeRide) return;
-    const poll = () => {
-      actor
-        .getMessages(activeRide.rideId, session.sessionId)
-        .then((msgs) => {
-          setMessages(msgs.map(([sender, text]) => ({ sender, text })));
-        })
-        .catch(() => {});
-    };
-    const interval = setInterval(poll, 3000);
-    return () => clearInterval(interval);
-  }, [actor, activeRide, session.sessionId]);
-
-  useEffect(() => {
     if (!activeRide) return;
     eventRef.current = setInterval(() => {
       const event =
@@ -253,16 +238,6 @@ export default function DriverDashboard({
       toast.error("Failed to complete ride");
     }
   }, [actor, activeRide, session.sessionId]);
-
-  const handleSendMessage = useCallback(async () => {
-    if (!actor || !activeRide || !chatInput.trim()) return;
-    try {
-      await actor.sendMessage(activeRide.rideId, session.sessionId, chatInput);
-      setChatInput("");
-    } catch {
-      toast.error("Failed to send message");
-    }
-  }, [actor, activeRide, chatInput, session.sessionId]);
 
   const handleSubmitRating = useCallback(async () => {
     if (!actor || !activeRide) return;
@@ -625,6 +600,19 @@ export default function DriverDashboard({
                       🗺️ TRACK RIDE
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => setShowGhostChat(true)}
+                    className="w-full mt-2 py-3 font-mono font-black text-xs tracking-widest uppercase rounded-xl transition-all active:scale-95"
+                    style={{
+                      background: "rgba(168,85,255,0.1)",
+                      border: "1px solid rgba(168,85,255,0.4)",
+                      color: "#a855ff",
+                    }}
+                    data-ocid="driver.ghost_chat.button"
+                  >
+                    💬 GHOST CHAT
+                  </button>
                 </div>
               </div>
 
@@ -700,62 +688,15 @@ export default function DriverDashboard({
                 )}
               </AnimatePresence>
 
-              {/* Chat */}
-              <div
-                className="glass-card rounded-xl overflow-hidden"
-                style={{ borderColor: "rgba(46,230,214,0.2)" }}
-              >
-                <div className="px-5 py-3 border-b border-white/5">
-                  <h2 className="text-xs font-bold uppercase tracking-widest text-white flex items-center gap-2">
-                    <Lock
-                      className="w-3.5 h-3.5"
-                      style={{ color: "#2ee6d6" }}
-                    />
-                    ENCRYPTED CHANNEL
-                  </h2>
-                </div>
-                <div className="h-36 overflow-y-auto p-4 space-y-2">
-                  {messages.length === 0 ? (
-                    <p
-                      className="text-xs text-[#a7b0c2] text-center py-4"
-                      data-ocid="driver.chat.empty_state"
-                    >
-                      No messages yet
-                    </p>
-                  ) : (
-                    messages.map((msg, i) => (
-                      <div
-                        key={msg.text + String(i)}
-                        className={`text-xs px-3 py-1.5 rounded-lg max-w-[80%] ${
-                          msg.sender === session.sessionId
-                            ? "ml-auto bg-cyan-500/15 text-cyan-200"
-                            : "bg-purple-500/10 text-purple-200"
-                        }`}
-                      >
-                        {msg.text}
-                      </div>
-                    ))
-                  )}
-                </div>
-                <div className="px-4 py-3 border-t border-white/5 flex gap-2">
-                  <Input
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                    placeholder="Encrypted message..."
-                    className="flex-1 bg-white/5 border-white/10 text-white text-xs placeholder:text-white/30"
-                    data-ocid="driver.chat.input"
-                  />
-                  <Button
-                    onClick={handleSendMessage}
-                    size="sm"
-                    className="btn-primary text-white px-3"
-                    data-ocid="driver.chat.submit_button"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                  </Button>
-                </div>
-              </div>
+              {/* Ghost Chat Overlay trigger placeholder */}
+              {showGhostChat && activeRide && (
+                <InRideGhostChat
+                  rideId={activeRide.rideId}
+                  mySessionId={session.sessionId}
+                  userRole="driver"
+                  onClose={() => setShowGhostChat(false)}
+                />
+              )}
             </div>
           </>
         )}

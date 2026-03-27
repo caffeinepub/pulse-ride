@@ -73,6 +73,7 @@ export default function GhostGroupPage({ onBack }: GhostGroupPageProps) {
   const [showMembers, setShowMembers] = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
   const [showCallOverlay, setShowCallOverlay] = useState(false);
+  const [isGroupCreator, setIsGroupCreator] = useState(false);
   const [terminating, setTerminating] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -103,13 +104,12 @@ export default function GhostGroupPage({ onBack }: GhostGroupPageProps) {
   const pollMessages = useCallback(async () => {
     if (!actor || !groupCode) return;
     try {
-      const raw = await (actor as any).getGroupMessages(
-        groupCode,
-        myId,
-        lastTimestamp,
-      );
+      const raw = await actor.getGroupMessages(groupCode, myId, lastTimestamp);
       if (raw && raw.length > 0) {
-        const newMsgs: GroupMessage[] = raw.map(
+        const filtered = raw.filter(
+          ([, text]: [string, string, bigint]) => !text.startsWith("__CALL__:"),
+        );
+        const newMsgs: GroupMessage[] = filtered.map(
           ([senderId, content, ts]: [string, string, bigint]) => {
             let expiresAt: number | null = null;
             if (deleteMode === "30s")
@@ -140,7 +140,7 @@ export default function GhostGroupPage({ onBack }: GhostGroupPageProps) {
       }
 
       // Refresh member list
-      const memberList = await (actor as any).listGroupMembers(groupCode, myId);
+      const memberList = await actor.listGroupMembers(groupCode, myId);
       if (memberList) setMembers(memberList);
     } catch (_e) {
       // silent
@@ -161,7 +161,8 @@ export default function GhostGroupPage({ onBack }: GhostGroupPageProps) {
     const code = genGroupCode();
     try {
       if (actor && !isFetching) {
-        await (actor as any).createGroupChannel(code, myId);
+        await actor.createGroupChannel(code, myId);
+        setIsGroupCreator(true);
       }
       setGroupCode(code);
       setMembers([myId]);
@@ -183,7 +184,7 @@ export default function GhostGroupPage({ onBack }: GhostGroupPageProps) {
     setError("");
     try {
       if (actor && !isFetching) {
-        const result = await (actor as any).joinGroupChannel(code, myId);
+        const result = await actor.joinGroupChannel(code, myId);
         if (typeof result === "string" && result.startsWith("ERROR")) {
           setError(result);
           setLoading(false);
@@ -226,7 +227,7 @@ export default function GhostGroupPage({ onBack }: GhostGroupPageProps) {
 
     try {
       if (actor && !isFetching) {
-        await (actor as any).sendGroupMessage(groupCode, myId, content);
+        await actor.sendGroupMessage(groupCode, myId, content);
       }
     } catch (_e) {
       // local only
@@ -237,7 +238,7 @@ export default function GhostGroupPage({ onBack }: GhostGroupPageProps) {
     setTerminating(true);
     try {
       if (actor && !isFetching) {
-        await (actor as any).leaveGroupChannel(groupCode, myId);
+        await actor.leaveGroupChannel(groupCode, myId);
       }
     } catch (_e) {
       // silent
@@ -807,6 +808,10 @@ export default function GhostGroupPage({ onBack }: GhostGroupPageProps) {
         onClose={() => setShowCallOverlay(false)}
         callerIds={members.filter((m) => m !== myId)}
         isGroup
+        actor={actor}
+        channelCode={groupCode}
+        myId={myId}
+        isInitiator={isGroupCreator}
       />
     </div>
   );

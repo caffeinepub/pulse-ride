@@ -629,10 +629,7 @@ actor {
 
   // --- Group Chat Channel Functions ---
   public shared ({ caller }) func createGroupChannel(groupCode : Text, sessionId : Text) : async Bool {
-    // Any user including guests can create group channels
-    // Verify session exists first
-    let _ = getSession(sessionId);
-    
+    // Any user including guests can create group channels — no session required
     switch (groupChats.get(groupCode)) {
       case (?existing) { false };
       case (null) {
@@ -653,10 +650,7 @@ actor {
   };
 
   public shared ({ caller }) func joinGroupChannel(groupCode : Text, sessionId : Text) : async Text {
-    // Any user including guests can join group channels
-    // Verify session exists first
-    let _ = getSession(sessionId);
-    
+    // Any user including guests can join group channels — no session required
     switch (groupChats.get(groupCode)) {
       case (?groupChat) {
         let alreadyMember = groupChat.members.any(func(m) { m.sessionId == sessionId });

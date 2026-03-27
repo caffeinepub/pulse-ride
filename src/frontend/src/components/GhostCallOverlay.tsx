@@ -1,3 +1,4 @@
+import type { backendInterface } from "@/backend.d";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 
@@ -6,12 +7,20 @@ export interface GhostCallOverlayProps {
   onClose: () => void;
   callerIds: string[];
   isGroup?: boolean;
+  actor?: backendInterface | null;
+  channelCode?: string;
+  myId?: string;
+  isInitiator?: boolean;
 }
 
 const VOICE_STYLES = ["MALE", "FEMALE", "NEUTRAL", "SYNTHETIC"] as const;
 type VoiceStyle = (typeof VOICE_STYLES)[number];
 
 const BAR_COUNT = 16;
+const STUN_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+];
 
 function playConnectTone(ctx: AudioContext) {
   const osc = ctx.createOscillator();
@@ -43,11 +52,55 @@ function playDisconnectTone(ctx: AudioContext) {
   osc.stop(now + 0.35);
 }
 
+// Apply AI voice masking effect chain
+function buildEffectChain(
+  ctx: AudioContext,
+  source: MediaStreamAudioSourceNode,
+  style: VoiceStyle,
+): { analyser: AnalyserNode; destination: AudioNode } {
+  const lowShelf = ctx.createBiquadFilter();
+  lowShelf.type = "lowshelf";
+  lowShelf.frequency.value = 300;
+  lowShelf.gain.value = style === "MALE" ? 6 : style === "FEMALE" ? -8 : -10;
+
+  const waveShaper = ctx.createWaveShaper();
+  const curve = new Float32Array(256);
+  for (let i = 0; i < 256; i++) {
+    const x = (i * 2) / 256 - 1;
+    curve[i] = ((Math.PI + 80) * x) / (Math.PI + 80 * Math.abs(x));
+  }
+  waveShaper.curve = curve;
+  waveShaper.oversample = "4x";
+
+  const highShelf = ctx.createBiquadFilter();
+  highShelf.type = "highshelf";
+  highShelf.frequency.value = 3000;
+  highShelf.gain.value = style === "FEMALE" ? 4 : -8;
+
+  const gain = ctx.createGain();
+  gain.gain.value = 0.7;
+
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 64;
+
+  source.connect(lowShelf);
+  lowShelf.connect(waveShaper);
+  waveShaper.connect(highShelf);
+  highShelf.connect(gain);
+  gain.connect(analyser);
+
+  return { analyser, destination: gain };
+}
+
 export default function GhostCallOverlay({
   isOpen,
   onClose,
   callerIds,
   isGroup = false,
+  actor,
+  channelCode,
+  myId,
+  isInitiator = false,
 }: GhostCallOverlayProps) {
   const [voiceStyle, setVoiceStyle] = useState<VoiceStyle>("SYNTHETIC");
   const [isMuted, setIsMuted] = useState(false);
@@ -58,15 +111,23 @@ export default function GhostCallOverlay({
   const [barHeights, setBarHeights] = useState<number[]>(
     Array(BAR_COUNT).fill(4),
   );
+  const [rtcStatus, setRtcStatus] = useState<
+    "idle" | "signaling" | "connected" | "failed"
+  >("idle");
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const gainRef = useRef<GainNode | null>(null);
+  const gainDestRef = useRef<AudioNode | null>(null);
   const rafRef = useRef<number | null>(null);
   const isMutedRef = useRef(false);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const sigPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sigIndexRef = useRef<bigint>(BigInt(0));
+  const processedSigIds = useRef<Set<string>>(new Set());
 
   // Keep muted ref in sync
   useEffect(() => {
@@ -95,7 +156,137 @@ export default function GhostCallOverlay({
     loop();
   };
 
-  // Start audio (microphone + effects)
+  // Send signaling message via backend
+  const sendSignal = async (type: string, payload: unknown) => {
+    if (!actor || !channelCode || !myId) return;
+    const msg = `__CALL__:${type}:${JSON.stringify(payload)}`;
+    try {
+      if (isGroup) {
+        await actor.sendGroupMessage(channelCode, myId, msg);
+      } else {
+        await actor.sendGhostMessage(channelCode, myId, msg);
+      }
+    } catch (_e) {
+      /* ignore */
+    }
+  };
+
+  // Set up WebRTC peer connection
+  const setupPeerConnection = (localStream: MediaStream) => {
+    const pc = new RTCPeerConnection({ iceServers: STUN_SERVERS });
+    pcRef.current = pc;
+
+    // Add local tracks
+    for (const track of localStream.getTracks()) {
+      pc.addTrack(track, localStream);
+    }
+
+    // Play remote audio
+    pc.ontrack = (event) => {
+      const [remoteStream] = event.streams;
+      if (!remoteAudioRef.current) {
+        const audio = new Audio();
+        audio.autoplay = true;
+        remoteAudioRef.current = audio;
+      }
+      remoteAudioRef.current.srcObject = remoteStream;
+      remoteAudioRef.current.play().catch(() => {
+        /* ignore */
+      });
+      setRtcStatus("connected");
+    };
+
+    // Send ICE candidates via backend signaling
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendSignal("ICE", event.candidate);
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "connected") {
+        setRtcStatus("connected");
+      } else if (
+        pc.connectionState === "failed" ||
+        pc.connectionState === "disconnected"
+      ) {
+        setRtcStatus("failed");
+      }
+    };
+
+    return pc;
+  };
+
+  // Start signaling polling
+  const startSignalingPoll = (pc: RTCPeerConnection) => {
+    if (!actor || !channelCode || !myId) return;
+
+    sigPollRef.current = setInterval(async () => {
+      try {
+        let msgs: Array<[string, string, bigint]>;
+        if (isGroup) {
+          msgs = await actor.getGroupMessages(
+            channelCode,
+            myId,
+            sigIndexRef.current,
+          );
+        } else {
+          msgs = await actor.getGhostMessages(
+            channelCode,
+            myId,
+            sigIndexRef.current,
+          );
+        }
+
+        for (const [senderId, text, idx] of msgs) {
+          const msgKey = `${senderId}-${idx}`;
+          if (senderId === myId) {
+            if (Number(idx) + 1 > Number(sigIndexRef.current))
+              sigIndexRef.current = BigInt(Number(idx) + 1);
+            continue;
+          }
+          if (processedSigIds.current.has(msgKey)) continue;
+          if (!text.startsWith("__CALL__:")) continue;
+
+          processedSigIds.current.add(msgKey);
+          if (Number(idx) + 1 > Number(sigIndexRef.current))
+            sigIndexRef.current = BigInt(Number(idx) + 1);
+
+          const parts = text.slice("__CALL__:".length).split(":");
+          const sigType = parts[0];
+          const payloadStr = parts.slice(1).join(":");
+
+          try {
+            const payload = JSON.parse(payloadStr);
+
+            if (sigType === "OFFER" && !isInitiator) {
+              await pc.setRemoteDescription(new RTCSessionDescription(payload));
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              await sendSignal("ANSWER", answer);
+              setRtcStatus("signaling");
+            } else if (sigType === "ANSWER" && isInitiator) {
+              if (pc.signalingState !== "stable") {
+                await pc.setRemoteDescription(
+                  new RTCSessionDescription(payload),
+                );
+              }
+            } else if (sigType === "ICE") {
+              if (pc.remoteDescription) {
+                await pc.addIceCandidate(new RTCIceCandidate(payload));
+              }
+            }
+          } catch (_e) {
+            /* ignore parse/webrtc errors */
+          }
+        }
+      } catch (_e) {
+        /* ignore poll errors */
+      }
+    }, 800);
+  };
+
+  // Start audio (microphone + AI masking effect) + WebRTC
   const startAudio = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -107,51 +298,51 @@ export default function GhostCallOverlay({
       const source = ctx.createMediaStreamSource(stream);
       sourceRef.current = source;
 
-      // Build effect chain
-      const lowShelf = ctx.createBiquadFilter();
-      lowShelf.type = "lowshelf";
-      lowShelf.frequency.value = 300;
-      lowShelf.gain.value = -10;
-
-      const waveShaper = ctx.createWaveShaper();
-      const curve = new Float32Array(256);
-      for (let i = 0; i < 256; i++) {
-        const x = (i * 2) / 256 - 1;
-        curve[i] = ((Math.PI + 80) * x) / (Math.PI + 80 * Math.abs(x));
-      }
-      waveShaper.curve = curve;
-      waveShaper.oversample = "4x";
-
-      const highShelf = ctx.createBiquadFilter();
-      highShelf.type = "highshelf";
-      highShelf.frequency.value = 3000;
-      highShelf.gain.value = -8;
-
-      const gain = ctx.createGain();
-      gain.gain.value = 0.7;
-      gainRef.current = gain;
-
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 64;
+      const { analyser, destination } = buildEffectChain(
+        ctx,
+        source,
+        voiceStyle,
+      );
+      gainDestRef.current = destination;
       analyserRef.current = analyser;
-
-      source.connect(lowShelf);
-      lowShelf.connect(waveShaper);
-      waveShaper.connect(highShelf);
-      highShelf.connect(gain);
-      gain.connect(analyser);
       analyser.connect(ctx.destination);
 
       startWaveformLoop(analyser);
       setMicPermission("granted");
       playConnectTone(ctx);
+
+      // Set up WebRTC if actor and channelCode provided
+      if (actor && channelCode && myId) {
+        const pc = setupPeerConnection(stream);
+        setRtcStatus("signaling");
+        startSignalingPoll(pc);
+
+        if (isInitiator) {
+          // Create and send offer
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          await sendSignal("OFFER", offer);
+        }
+      }
     } catch {
       setMicPermission("denied");
     }
   };
 
-  // Stop audio and cleanup
+  // Stop audio and WebRTC cleanup
   const stopAudio = () => {
+    if (sigPollRef.current) {
+      clearInterval(sigPollRef.current);
+      sigPollRef.current = null;
+    }
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = null;
+      remoteAudioRef.current = null;
+    }
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
@@ -169,17 +360,20 @@ export default function GhostCallOverlay({
       streamRef.current = null;
     }
     sourceRef.current = null;
-    gainRef.current = null;
+    gainDestRef.current = null;
     analyserRef.current = null;
+    processedSigIds.current.clear();
+    sigIndexRef.current = BigInt(0);
     setBarHeights(Array(BAR_COUNT).fill(4));
     setMicPermission("pending");
+    setRtcStatus("idle");
   };
 
-  // Handle mute — disconnect/reconnect microphone source from gain node
+  // Handle mute — disconnect/reconnect microphone source
   useEffect(() => {
     const source = sourceRef.current;
-    const gain = gainRef.current;
-    if (!source || !gain) return;
+    const dest = gainDestRef.current;
+    if (!source || !dest) return;
     if (isMuted) {
       try {
         source.disconnect();
@@ -188,7 +382,7 @@ export default function GhostCallOverlay({
       }
     } else {
       try {
-        source.connect(gain);
+        source.connect(dest);
       } catch {
         /* ignore */
       }
@@ -211,7 +405,6 @@ export default function GhostCallOverlay({
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-    // startAudio/stopAudio are defined inline — intentionally excluded to avoid stale closure issues
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
@@ -219,6 +412,9 @@ export default function GhostCallOverlay({
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (sigPollRef.current) clearInterval(sigPollRef.current);
+      if (pcRef.current) pcRef.current.close();
+      if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
       const ctx = audioCtxRef.current;
       if (ctx && ctx.state !== "closed") ctx.close();
       if (streamRef.current) {
@@ -238,6 +434,47 @@ export default function GhostCallOverlay({
   const handleClose = () => {
     stopAudio();
     onClose();
+  };
+
+  const rtcStatusLabel = () => {
+    if (!actor || !channelCode) return null;
+    if (rtcStatus === "signaling")
+      return (
+        <span
+          style={{
+            color: "#f59e0b",
+            fontSize: "10px",
+            fontFamily: "monospace",
+          }}
+        >
+          ⟳ BAĞLANIYOR...
+        </span>
+      );
+    if (rtcStatus === "connected")
+      return (
+        <span
+          style={{
+            color: "#22c55e",
+            fontSize: "10px",
+            fontFamily: "monospace",
+          }}
+        >
+          ● CANLI SES AKTİF
+        </span>
+      );
+    if (rtcStatus === "failed")
+      return (
+        <span
+          style={{
+            color: "#ef4444",
+            fontSize: "10px",
+            fontFamily: "monospace",
+          }}
+        >
+          ✕ BAĞLANTI KESİLDİ
+        </span>
+      );
+    return null;
   };
 
   return (
@@ -345,11 +582,16 @@ export default function GhostCallOverlay({
                     className="text-base font-bold"
                     style={{ color: "#00fff7" }}
                   >
-                    {callerIds[0] ?? "GHOST-????"}
+                    {callerIds.find((id) => id !== myId) ?? "GHOST-????"}
                   </div>
                 </div>
               )}
             </div>
+
+            {/* RTC Status */}
+            {rtcStatusLabel() && (
+              <div className="flex items-center gap-2">{rtcStatusLabel()}</div>
+            )}
 
             {/* Avatar */}
             <div
@@ -358,7 +600,10 @@ export default function GhostCallOverlay({
                 background:
                   "radial-gradient(circle, rgba(168,85,247,0.2) 0%, rgba(0,255,247,0.05) 100%)",
                 border: "1.5px solid rgba(168,85,247,0.5)",
-                boxShadow: "0 0 30px rgba(168,85,247,0.3)",
+                boxShadow:
+                  rtcStatus === "connected"
+                    ? "0 0 30px rgba(34,197,94,0.4), 0 0 60px rgba(34,197,94,0.15)"
+                    : "0 0 30px rgba(168,85,247,0.3)",
               }}
             >
               👻
@@ -378,11 +623,7 @@ export default function GhostCallOverlay({
                       isMuted || micPermission !== "granted"
                         ? "rgba(0,255,247,0.2)"
                         : `rgba(0,255,247,${0.4 + (h / 44) * 0.6})`,
-                    boxShadow:
-                      !isMuted && micPermission === "granted" && h > 10
-                        ? `0 0 ${h / 4}px rgba(0,255,247,0.5)`
-                        : "none",
-                    transition: "height 0.05s ease-out",
+                    transition: "height 0.05s ease",
                   }}
                 />
               ))}
@@ -390,14 +631,14 @@ export default function GhostCallOverlay({
 
             {/* Timer */}
             <div
-              className="text-2xl font-bold tracking-[0.2em]"
-              style={{ fontFamily: "monospace", color: "#00fff7" }}
+              className="text-2xl font-bold tracking-widest"
+              style={{ color: "#00fff7", fontFamily: "monospace" }}
             >
               {formatTime(elapsed)}
             </div>
 
             {/* Voice style selector */}
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap justify-center">
               {VOICE_STYLES.map((style) => (
                 <button
                   key={style}
@@ -408,41 +649,47 @@ export default function GhostCallOverlay({
                     background:
                       voiceStyle === style
                         ? "rgba(168,85,247,0.3)"
-                        : "rgba(168,85,247,0.05)",
+                        : "rgba(255,255,255,0.04)",
                     border:
                       voiceStyle === style
-                        ? "1px solid rgba(168,85,247,0.8)"
-                        : "1px solid rgba(168,85,247,0.2)",
-                    color: voiceStyle === style ? "#e879f9" : "#a7b0c2",
-                    boxShadow:
-                      voiceStyle === style
-                        ? "0 0 10px rgba(168,85,247,0.3)"
-                        : "none",
+                        ? "1px solid rgba(168,85,247,0.7)"
+                        : "1px solid rgba(255,255,255,0.1)",
+                    color: voiceStyle === style ? "#a855f7" : "#a7b0c2",
                     fontFamily: "monospace",
                   }}
-                  data-ocid={`ghost_call.${style.toLowerCase()}.toggle`}
                 >
                   {style}
                 </button>
               ))}
             </div>
 
+            {/* Info */}
+            <div
+              className="text-center text-[10px] leading-relaxed"
+              style={{
+                color: "rgba(167,176,194,0.6)",
+                fontFamily: "monospace",
+              }}
+            >
+              SES AI TARAFINDAN MASKELENİYOR
+              <br />
+              ORİJİNAL SES HİÇBİR YERDE SAKLANMIYOR
+            </div>
+
             {/* Controls */}
-            <div className="flex items-center gap-5">
+            <div className="flex gap-4">
               <button
                 type="button"
                 onClick={() => setIsMuted((m) => !m)}
-                className="w-14 h-14 rounded-full flex items-center justify-center text-xl transition-all hover:scale-105"
+                className="w-14 h-14 rounded-full flex items-center justify-center text-xl transition-all"
                 style={{
                   background: isMuted
-                    ? "rgba(255,180,0,0.2)"
-                    : "rgba(0,255,247,0.1)",
+                    ? "rgba(255,50,80,0.2)"
+                    : "rgba(0,255,247,0.08)",
                   border: isMuted
-                    ? "1.5px solid rgba(255,180,0,0.6)"
-                    : "1.5px solid rgba(0,255,247,0.4)",
-                  color: isMuted ? "#ffb400" : "#00fff7",
+                    ? "1.5px solid rgba(255,50,80,0.6)"
+                    : "1.5px solid rgba(0,255,247,0.3)",
                 }}
-                data-ocid="ghost_call.mute.toggle"
               >
                 {isMuted ? "🔇" : "🎤"}
               </button>
@@ -450,38 +697,15 @@ export default function GhostCallOverlay({
               <button
                 type="button"
                 onClick={handleClose}
-                className="w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all hover:scale-105"
+                className="w-14 h-14 rounded-full flex items-center justify-center text-xl transition-all"
                 style={{
-                  background: "rgba(255,50,80,0.25)",
-                  border: "2px solid rgba(255,50,80,0.7)",
-                  color: "#ff3250",
-                  boxShadow: "0 0 20px rgba(255,50,80,0.3)",
+                  background: "rgba(255,50,80,0.2)",
+                  border: "1.5px solid rgba(255,50,80,0.6)",
                 }}
-                data-ocid="ghost_call.end.button"
               >
                 📵
               </button>
             </div>
-
-            {/* Group member list */}
-            {isGroup && callerIds.length > 0 && (
-              <div className="flex flex-wrap justify-center gap-2">
-                {callerIds.map((id) => (
-                  <span
-                    key={id}
-                    className="text-[10px] px-2 py-0.5 rounded-full"
-                    style={{
-                      fontFamily: "monospace",
-                      color: "#a855f7",
-                      border: "1px solid rgba(168,85,247,0.3)",
-                      background: "rgba(168,85,247,0.08)",
-                    }}
-                  >
-                    👤 {id}
-                  </span>
-                ))}
-              </div>
-            )}
           </div>
         </motion.div>
       )}

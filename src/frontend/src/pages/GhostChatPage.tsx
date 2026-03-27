@@ -161,6 +161,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
   const [showCallOverlay, setShowCallOverlay] = useState(false);
+  const [isCreator, setIsCreator] = useState(false);
   const [ended, setEnded] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [msgCount, setMsgCount] = useState(0);
@@ -174,7 +175,10 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
     "Şifre doğrulanıyor...",
   );
   const [lastMsgIndex, setLastMsgIndex] = useState(0);
+  // p2pPollRef: only for message polling in p2p mode
   const p2pPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // connectPollRef: only for connection establishment polling
+  const connectPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const photoRef = useRef<HTMLInputElement>(null);
@@ -242,12 +246,12 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
     return () => clearTimeout(t);
   }, [partnerId, connectionMode]);
 
-  // P2P message polling
+  // P2P message polling (only active in p2p mode)
   useEffect(() => {
     if (connectionMode !== "p2p" || !actor || !roomCode) return;
     p2pPollRef.current = setInterval(async () => {
       try {
-        const msgs = await actor.getGhostMessages(
+        const msgs = await actor.getGroupMessages(
           roomCode,
           myId,
           BigInt(lastMsgIndex),
@@ -257,7 +261,11 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
           const newMsgs: ChatMessage[] = [];
           for (const [senderId, text, idx] of msgs) {
             const numIdx = Number(idx);
-            if (numIdx >= lastMsgIndex && senderId !== myId) {
+            if (
+              numIdx >= lastMsgIndex &&
+              senderId !== myId &&
+              !text.startsWith("__CALL__:")
+            ) {
               const expiresAt = genExpiry(deleteMode);
               newMsgs.push({
                 id: `p2p-${numIdx}`,
@@ -308,6 +316,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
   useEffect(() => {
     return () => {
       if (p2pPollRef.current) clearInterval(p2pPollRef.current);
+      if (connectPollRef.current) clearInterval(connectPollRef.current);
       if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
     };
   }, []);
@@ -325,29 +334,33 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
     setConnectingStatus("Oda oluşturuluyor...");
 
     if (!actor) {
-      // fallback to solo
       setConnectionMode("solo");
       return;
     }
 
     try {
-      // Try to create the room first
-      const created = await actor.createGhostChannel(code, myId);
+      // Try to create channel — returns true if successfully created (we are first)
+      const created = await actor.createGroupChannel(code, myId);
       if (created) {
+        setIsCreator(true);
         setConnectingStatus("Oda oluşturuldu. Partner bekleniyor...");
-        // Poll for partner to join
         let waited = 0;
         const poll = setInterval(async () => {
           waited += 1;
           if (waited > 120) {
             clearInterval(poll);
+            try {
+              await actor.leaveGroupChannel(code, myId);
+            } catch (_e) {
+              /* ignore */
+            }
             setPasswordError("Zaman aşımı — şifreyi tekrar deneyin");
             setConnectionMode("setup");
             return;
           }
           try {
-            const status = await actor.checkGhostChannel(code);
-            if (status === "connected") {
+            const members = await actor.listGroupMembers(code, myId);
+            if (members.length >= 2) {
               clearInterval(poll);
               setConnectionMode("p2p");
               setPartnerId(genGhostId());
@@ -356,21 +369,41 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
             /* ignore */
           }
         }, 1000);
-        p2pPollRef.current = poll;
+        connectPollRef.current = poll;
       } else {
-        // Room already exists — try to join
+        // Channel exists — try to join as second user
         setConnectingStatus("Odaya katılınıyor...");
-        const result = await actor.joinGhostChannel(code, myId);
-        if (result === "connected") {
+        const result = await actor.joinGroupChannel(code, myId);
+        const memberCount = Number.parseInt(result);
+        if (
+          result === "connected" ||
+          (!Number.isNaN(memberCount) && memberCount >= 2)
+        ) {
           setConnectionMode("p2p");
           setPartnerId(genGhostId());
-        } else if (result === "waiting") {
-          // We are the second person but still waiting — keep polling
+        } else if (
+          result === "waiting" ||
+          (!Number.isNaN(memberCount) && memberCount === 1)
+        ) {
+          // Still waiting — poll for members
           setConnectingStatus("Bağlantı kuruluyor...");
+          let waited = 0;
           const poll = setInterval(async () => {
+            waited += 1;
+            if (waited > 60) {
+              clearInterval(poll);
+              try {
+                await actor.leaveGroupChannel(code, myId);
+              } catch (_e) {
+                /* ignore */
+              }
+              setPasswordError("Zaman aşımı — şifreyi tekrar deneyin");
+              setConnectionMode("setup");
+              return;
+            }
             try {
-              const r = await actor.joinGhostChannel(code, myId);
-              if (r === "connected") {
+              const members = await actor.listGroupMembers(code, myId);
+              if (members.length >= 2) {
                 clearInterval(poll);
                 setConnectionMode("p2p");
                 setPartnerId(genGhostId());
@@ -379,13 +412,63 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
               /* ignore */
             }
           }, 1000);
-          p2pPollRef.current = poll;
+          connectPollRef.current = poll;
         } else if (result === "full") {
           setPasswordError("Bu oda dolu — farklı bir şifre deneyin");
           setConnectionMode("setup");
         } else {
-          setPasswordError("Bağlantı hatası — tekrar deneyin");
-          setConnectionMode("setup");
+          // "not_found" or unknown — become creator
+          setConnectingStatus("Yeni oda oluşturuluyor...");
+          try {
+            const freshCreated = await actor.createGroupChannel(code, myId);
+            if (freshCreated) {
+              setIsCreator(true);
+              setConnectingStatus("Oda oluşturuldu. Partner bekleniyor...");
+              let waited = 0;
+              const poll = setInterval(async () => {
+                waited += 1;
+                if (waited > 120) {
+                  clearInterval(poll);
+                  try {
+                    await actor.leaveGroupChannel(code, myId);
+                  } catch (_e) {
+                    /* ignore */
+                  }
+                  setPasswordError("Zaman aşımı — şifreyi tekrar deneyin");
+                  setConnectionMode("setup");
+                  return;
+                }
+                try {
+                  const members = await actor.listGroupMembers(code, myId);
+                  if (members.length >= 2) {
+                    clearInterval(poll);
+                    setConnectionMode("p2p");
+                    setPartnerId(genGhostId());
+                  }
+                } catch (_e) {
+                  /* ignore */
+                }
+              }, 1000);
+              connectPollRef.current = poll;
+            } else {
+              // Someone else just created it, join again
+              const r2 = await actor.joinGroupChannel(code, myId);
+              const r2Count = Number.parseInt(r2);
+              if (
+                r2 === "connected" ||
+                (!Number.isNaN(r2Count) && r2Count >= 2)
+              ) {
+                setConnectionMode("p2p");
+                setPartnerId(genGhostId());
+              } else {
+                setPasswordError("Bağlantı kurulamadı — tekrar deneyin");
+                setConnectionMode("setup");
+              }
+            }
+          } catch (_e) {
+            setPasswordError("Bağlantı hatası — tekrar deneyin");
+            setConnectionMode("setup");
+          }
         }
       }
     } catch (_e) {
@@ -431,7 +514,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
         overrideType !== "location"
       ) {
         try {
-          await actor.sendGhostMessage(roomCode, myId, content);
+          await actor.sendGroupMessage(roomCode, myId, content);
         } catch (_e) {
           /* ignore */
         }
@@ -479,7 +562,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
   const handleEndSession = async () => {
     if (connectionMode === "p2p" && actor && roomCode) {
       try {
-        await actor.closeGhostChannel(roomCode, myId);
+        await actor.leaveGroupChannel(roomCode, myId);
       } catch (_e) {
         /* ignore */
       }
@@ -704,6 +787,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
           <button
             type="button"
             onClick={() => {
+              if (connectPollRef.current) clearInterval(connectPollRef.current);
               if (p2pPollRef.current) clearInterval(p2pPollRef.current);
               setConnectionMode("setup");
             }}
@@ -1289,6 +1373,10 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
           isOpen={showCallOverlay}
           onClose={() => setShowCallOverlay(false)}
           callerIds={[myId, partnerId]}
+          actor={actor}
+          channelCode={roomCode}
+          myId={myId}
+          isInitiator={isCreator}
         />
       )}
     </div>

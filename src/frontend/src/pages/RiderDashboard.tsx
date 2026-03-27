@@ -1,4 +1,5 @@
 import type { SessionState } from "@/App";
+import InRideGhostChat from "@/components/InRideGhostChat";
 import KarmicScore from "@/components/KarmicScore";
 import { Button } from "@/components/ui/button";
 import {
@@ -122,20 +123,17 @@ export default function RiderDashboard({
   const [sessionCode, setSessionCode] = useState<string | null>(null);
   const [rideStatus, setRideStatus] = useState("idle");
   const [aiPriceData, setAiPriceData] = useState<AiPriceData | null>(null);
-  const [messages, setMessages] = useState<
-    Array<{ sender: string; text: string; ts: number }>
-  >([]);
-  const [chatInput, setChatInput] = useState("");
+
   const [selectedMood, setSelectedMood] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [approving, setApproving] = useState(false);
   const [timer, setTimer] = useState(0);
   const [showRating, setShowRating] = useState(false);
   const [showSnapshot, setShowSnapshot] = useState(false);
+  const [showGhostChat, setShowGhostChat] = useState(false);
   const [ratingStars, setRatingStars] = useState(5);
   const [sessionTerminated, setSessionTerminated] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const phantomRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -154,21 +152,6 @@ export default function RiderDashboard({
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
-
-  useEffect(() => {
-    if (!actor || !rideId) return;
-    pollRef.current = setInterval(async () => {
-      try {
-        const msgs = await actor.getMessages(rideId, session.sessionId);
-        setMessages(
-          msgs.map(([sender, text, ts]) => ({ sender, text, ts: Number(ts) })),
-        );
-      } catch {}
-    }, 3000);
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [actor, rideId, session.sessionId]);
 
   useEffect(() => {
     if (!phantomMode || !rideId) return;
@@ -240,17 +223,6 @@ export default function RiderDashboard({
     toast.success("Cash payment confirmed — trust scores updated anonymously");
     setShowRating(true);
   }, [actor, rideId, session.sessionId]);
-
-  const handleSendMessage = useCallback(async () => {
-    if (!actor || !rideId || !chatInput.trim()) return;
-    try {
-      await actor.sendMessage(rideId, session.sessionId, chatInput);
-      setChatInput("");
-      toast.success("Message sent");
-    } catch {
-      toast.error("Failed to send message");
-    }
-  }, [actor, rideId, chatInput, session.sessionId]);
 
   const handleMoodSelect = (emoji: string) => {
     setSelectedMood(emoji);
@@ -763,6 +735,21 @@ export default function RiderDashboard({
                   💣 HAFIZA BOMBASI
                 </button>
               )}
+              {rideId && (
+                <button
+                  type="button"
+                  onClick={() => setShowGhostChat(true)}
+                  className="w-full mt-2 py-3 font-mono font-black text-xs tracking-widest uppercase rounded-xl transition-all active:scale-95"
+                  style={{
+                    background: "rgba(168,85,255,0.1)",
+                    border: "1px solid rgba(168,85,255,0.4)",
+                    color: "#a855ff",
+                  }}
+                  data-ocid="rider.ghost_chat.button"
+                >
+                  💬 GHOST CHAT
+                </button>
+              )}
             </motion.div>
           )}
 
@@ -878,60 +865,14 @@ export default function RiderDashboard({
           </div>
         </div>
 
-        {/* Chat Panel */}
-        {rideId && (
-          <div
-            className="glass-card rounded-xl overflow-hidden"
-            style={{ borderColor: "rgba(168,85,255,0.2)" }}
-          >
-            <div className="px-5 py-3 border-b border-white/5">
-              <h2 className="text-xs font-bold uppercase tracking-widest text-white flex items-center gap-2">
-                <Lock className="w-3.5 h-3.5" style={{ color: "#2ee6d6" }} />
-                ENCRYPTED CHANNEL
-              </h2>
-            </div>
-            <div className="h-40 overflow-y-auto p-4 space-y-2">
-              {messages.length === 0 ? (
-                <p
-                  className="text-xs text-[#a7b0c2] text-center py-6"
-                  data-ocid="rider.chat.empty_state"
-                >
-                  No messages yet
-                </p>
-              ) : (
-                messages.map((msg) => (
-                  <div
-                    key={msg.ts}
-                    className={`text-xs px-3 py-1.5 rounded-lg max-w-[80%] ${
-                      msg.sender === session.sessionId
-                        ? "ml-auto bg-purple-500/15 text-purple-200"
-                        : "bg-cyan-500/10 text-cyan-200"
-                    }`}
-                  >
-                    {msg.text}
-                  </div>
-                ))
-              )}
-            </div>
-            <div className="px-4 py-3 border-t border-white/5 flex gap-2">
-              <Input
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                placeholder="Encrypted message..."
-                className="flex-1 bg-white/5 border-white/10 text-white text-xs placeholder:text-white/30"
-                data-ocid="rider.chat.input"
-              />
-              <Button
-                onClick={handleSendMessage}
-                size="sm"
-                className="btn-primary text-white px-3"
-                data-ocid="rider.chat.submit_button"
-              >
-                <Send className="w-3.5 h-3.5" />
-              </Button>
-            </div>
-          </div>
+        {/* Ghost Chat Overlay */}
+        {showGhostChat && rideId && (
+          <InRideGhostChat
+            rideId={rideId}
+            mySessionId={session.sessionId}
+            userRole="rider"
+            onClose={() => setShowGhostChat(false)}
+          />
         )}
       </div>
 
