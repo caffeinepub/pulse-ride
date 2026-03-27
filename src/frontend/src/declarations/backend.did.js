@@ -23,6 +23,7 @@ export const idlService = IDL.Service({
   'checkGhostChannel' : IDL.Func([IDL.Text], [IDL.Text], ['query']),
   'closeGhostChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
   'createGhostChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
+  'createGroupChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
   'createRideRequest' : IDL.Func(
       [IDL.Text, IDL.Text, IDL.Text, IDL.Bool],
       [IDL.Text, IDL.Text],
@@ -35,6 +36,11 @@ export const idlService = IDL.Service({
   'getGhostMessages' : IDL.Func(
       [IDL.Text, IDL.Text, IDL.Nat],
       [IDL.Vec(IDL.Tuple(IDL.Text, IDL.Text, IDL.Nat))],
+      ['query'],
+    ),
+  'getGroupMessages' : IDL.Func(
+      [IDL.Text, IDL.Text, IDL.Int],
+      [IDL.Vec(IDL.Tuple(IDL.Text, IDL.Text, IDL.Int))],
       ['query'],
     ),
   'getMessages' : IDL.Func(
@@ -51,6 +57,8 @@ export const idlService = IDL.Service({
   'heartbeatQuery' : IDL.Func([], [], ['query']),
   'isCallerAdmin' : IDL.Func([], [IDL.Bool], ['query']),
   'joinGhostChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Text], []),
+  'joinGroupChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Text], []),
+  'leaveGroupChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
   'listAvailableRides' : IDL.Func(
       [],
       [
@@ -69,8 +77,14 @@ export const idlService = IDL.Service({
       ],
       ['query'],
     ),
+  'listGroupMembers' : IDL.Func(
+      [IDL.Text, IDL.Text],
+      [IDL.Vec(IDL.Text)],
+      ['query'],
+    ),
   'saveCallerUserProfile' : IDL.Func([UserProfile], [], []),
   'sendGhostMessage' : IDL.Func([IDL.Text, IDL.Text, IDL.Text], [IDL.Bool], []),
+  'sendGroupMessage' : IDL.Func([IDL.Text, IDL.Text, IDL.Text], [IDL.Bool], []),
   'sendMessage' : IDL.Func([IDL.Text, IDL.Text, IDL.Text], [IDL.Bool], []),
   'submitRating' : IDL.Func([IDL.Text, IDL.Text, IDL.Nat], [IDL.Bool], []),
   'updateRideStatus' : IDL.Func([IDL.Text, IDL.Text, IDL.Text], [IDL.Bool], []),
@@ -94,6 +108,7 @@ export const idlFactory = ({ IDL }) => {
     'checkGhostChannel' : IDL.Func([IDL.Text], [IDL.Text], ['query']),
     'closeGhostChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
     'createGhostChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
+    'createGroupChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
     'createRideRequest' : IDL.Func(
         [IDL.Text, IDL.Text, IDL.Text, IDL.Bool],
         [IDL.Text, IDL.Text],
@@ -106,6 +121,11 @@ export const idlFactory = ({ IDL }) => {
     'getGhostMessages' : IDL.Func(
         [IDL.Text, IDL.Text, IDL.Nat],
         [IDL.Vec(IDL.Tuple(IDL.Text, IDL.Text, IDL.Nat))],
+        ['query'],
+      ),
+    'getGroupMessages' : IDL.Func(
+        [IDL.Text, IDL.Text, IDL.Int],
+        [IDL.Vec(IDL.Tuple(IDL.Text, IDL.Text, IDL.Int))],
         ['query'],
       ),
     'getMessages' : IDL.Func(
@@ -122,6 +142,8 @@ export const idlFactory = ({ IDL }) => {
     'heartbeatQuery' : IDL.Func([], [], ['query']),
     'isCallerAdmin' : IDL.Func([], [IDL.Bool], ['query']),
     'joinGhostChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Text], []),
+    'joinGroupChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Text], []),
+    'leaveGroupChannel' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
     'listAvailableRides' : IDL.Func(
         [],
         [
@@ -140,8 +162,18 @@ export const idlFactory = ({ IDL }) => {
         ],
         ['query'],
       ),
+    'listGroupMembers' : IDL.Func(
+        [IDL.Text, IDL.Text],
+        [IDL.Vec(IDL.Text)],
+        ['query'],
+      ),
     'saveCallerUserProfile' : IDL.Func([UserProfile], [], []),
     'sendGhostMessage' : IDL.Func(
+        [IDL.Text, IDL.Text, IDL.Text],
+        [IDL.Bool],
+        [],
+      ),
+    'sendGroupMessage' : IDL.Func(
         [IDL.Text, IDL.Text, IDL.Text],
         [IDL.Bool],
         [],

@@ -1,10 +1,16 @@
+import type { backendInterface as FullBackendInterface } from "@/backend.d";
+import GhostCallOverlay from "@/components/GhostCallOverlay";
+import { useActor } from "@/hooks/useActor";
 import {
   AlertTriangle,
   FileText,
+  Lock,
   MapPin,
   Paperclip,
+  Phone,
   Send,
   SmilePlus,
+  Users,
   X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -16,6 +22,7 @@ interface GhostChatPageProps {
 
 type AutoDeleteMode = "30s" | "5m" | "session";
 type MessageType = "text" | "photo" | "document" | "location";
+type ConnectionMode = "setup" | "solo" | "connecting" | "p2p";
 
 interface ChatMessage {
   id: string;
@@ -52,6 +59,16 @@ function genExpiry(mode: AutoDeleteMode): number | null {
 function getCountdown(expiresAt: number | null): number | null {
   if (expiresAt === null) return null;
   return Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+}
+
+// Simple deterministic hash to display room fingerprint
+function roomFingerprint(password: string): string {
+  let h = 0;
+  for (let i = 0; i < password.length; i++) {
+    h = (Math.imul(31, h) + password.charCodeAt(i)) | 0;
+  }
+  const hex = Math.abs(h).toString(16).toUpperCase().padStart(8, "0");
+  return `GCHAT-${hex.slice(0, 4)}-${hex.slice(4, 8)}`;
 }
 
 const COMMON_EMOJIS = [
@@ -132,16 +149,34 @@ const GHOST_MESSAGES = [
 ];
 
 export default function GhostChatPage({ onBack }: GhostChatPageProps) {
+  const { actor: _actor } = useActor();
+  const actor = _actor as unknown as FullBackendInterface | null;
+
   const [myId] = useState(genGhostId);
-  const [partnerId] = useState(genGhostId);
+  const [partnerId, setPartnerId] = useState(genGhostId);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [deleteMode, setDeleteMode] = useState<AutoDeleteMode>("session");
   const [showEmojiPanel, setShowEmojiPanel] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
+  const [showCallOverlay, setShowCallOverlay] = useState(false);
   const [ended, setEnded] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [msgCount, setMsgCount] = useState(0);
+
+  // P2P password mode
+  const [connectionMode, setConnectionMode] = useState<ConnectionMode>("setup");
+  const [passwordInput, setPasswordInput] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [roomCode, setRoomCode] = useState("");
+  const [connectingStatus, setConnectingStatus] = useState(
+    "Şifre doğrulanıyor...",
+  );
+  const [lastMsgIndex, setLastMsgIndex] = useState(0);
+  const p2pPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const photoRef = useRef<HTMLInputElement>(null);
   const docRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -174,8 +209,9 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
     return () => clearInterval(iv);
   }, []);
 
-  // Simulate incoming messages
+  // Simulate incoming messages (solo mode only)
   useEffect(() => {
+    if (connectionMode !== "solo") return;
     let t: ReturnType<typeof setTimeout>;
     const schedule = () => {
       const delay = 8000 + Math.random() * 4000;
@@ -204,11 +240,63 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
     };
     schedule();
     return () => clearTimeout(t);
-  }, [partnerId]);
+  }, [partnerId, connectionMode]);
 
-  const [msgCount, setMsgCount] = useState(0);
+  // P2P message polling
+  useEffect(() => {
+    if (connectionMode !== "p2p" || !actor || !roomCode) return;
+    p2pPollRef.current = setInterval(async () => {
+      try {
+        const msgs = await actor.getGhostMessages(
+          roomCode,
+          myId,
+          BigInt(lastMsgIndex),
+        );
+        if (msgs.length > 0) {
+          let newIndex = lastMsgIndex;
+          const newMsgs: ChatMessage[] = [];
+          for (const [senderId, text, idx] of msgs) {
+            const numIdx = Number(idx);
+            if (numIdx >= lastMsgIndex && senderId !== myId) {
+              const expiresAt = genExpiry(deleteMode);
+              newMsgs.push({
+                id: `p2p-${numIdx}`,
+                type: "text",
+                content: text,
+                sender: "ghost",
+                senderLabel: partnerId,
+                deleteMode,
+                createdAt: Date.now(),
+                expiresAt,
+                countdown: getCountdown(expiresAt),
+              });
+            }
+            if (numIdx + 1 > newIndex) newIndex = numIdx + 1;
+          }
+          if (newMsgs.length > 0) {
+            setMessages((prev) => [...prev, ...newMsgs]);
+            setMsgCount((c) => c + newMsgs.length);
+          }
+          setLastMsgIndex(newIndex);
+        }
+      } catch (_e) {
+        // ignore poll errors
+      }
+    }, 1000);
+    return () => {
+      if (p2pPollRef.current) clearInterval(p2pPollRef.current);
+    };
+  }, [
+    connectionMode,
+    actor,
+    roomCode,
+    myId,
+    partnerId,
+    lastMsgIndex,
+    deleteMode,
+  ]);
 
-  // Auto scroll when msgCount changes
+  // Auto scroll
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally trigger on msgCount
   useEffect(() => {
     if (scrollRef.current) {
@@ -216,8 +304,98 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
     }
   }, [msgCount]);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (p2pPollRef.current) clearInterval(p2pPollRef.current);
+      if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
+    };
+  }, []);
+
+  const handleConnectWithPassword = async () => {
+    const pw = passwordInput.trim();
+    if (pw.length < 6) {
+      setPasswordError("Şifre en az 6 karakter olmalı");
+      return;
+    }
+    setPasswordError("");
+    const code = `chatroom-${pw}`;
+    setRoomCode(code);
+    setConnectionMode("connecting");
+    setConnectingStatus("Oda oluşturuluyor...");
+
+    if (!actor) {
+      // fallback to solo
+      setConnectionMode("solo");
+      return;
+    }
+
+    try {
+      // Try to create the room first
+      const created = await actor.createGhostChannel(code, myId);
+      if (created) {
+        setConnectingStatus("Oda oluşturuldu. Partner bekleniyor...");
+        // Poll for partner to join
+        let waited = 0;
+        const poll = setInterval(async () => {
+          waited += 1;
+          if (waited > 120) {
+            clearInterval(poll);
+            setPasswordError("Zaman aşımı — şifreyi tekrar deneyin");
+            setConnectionMode("setup");
+            return;
+          }
+          try {
+            const status = await actor.checkGhostChannel(code);
+            if (status === "connected") {
+              clearInterval(poll);
+              setConnectionMode("p2p");
+              setPartnerId(genGhostId());
+            }
+          } catch (_e) {
+            /* ignore */
+          }
+        }, 1000);
+        p2pPollRef.current = poll;
+      } else {
+        // Room already exists — try to join
+        setConnectingStatus("Odaya katılınıyor...");
+        const result = await actor.joinGhostChannel(code, myId);
+        if (result === "connected") {
+          setConnectionMode("p2p");
+          setPartnerId(genGhostId());
+        } else if (result === "waiting") {
+          // We are the second person but still waiting — keep polling
+          setConnectingStatus("Bağlantı kuruluyor...");
+          const poll = setInterval(async () => {
+            try {
+              const r = await actor.joinGhostChannel(code, myId);
+              if (r === "connected") {
+                clearInterval(poll);
+                setConnectionMode("p2p");
+                setPartnerId(genGhostId());
+              }
+            } catch (_e) {
+              /* ignore */
+            }
+          }, 1000);
+          p2pPollRef.current = poll;
+        } else if (result === "full") {
+          setPasswordError("Bu oda dolu — farklı bir şifre deneyin");
+          setConnectionMode("setup");
+        } else {
+          setPasswordError("Bağlantı hatası — tekrar deneyin");
+          setConnectionMode("setup");
+        }
+      }
+    } catch (_e) {
+      setPasswordError("Bağlantı hatası — tekrar deneyin");
+      setConnectionMode("setup");
+    }
+  };
+
   const sendMessage = useCallback(
-    (
+    async (
       overrideContent?: string,
       overrideType?: MessageType,
       extra?: Partial<ChatMessage>,
@@ -242,8 +420,24 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
       setInput("");
       setShowEmojiPanel(false);
       setShowAttachMenu(false);
+
+      // Send to backend if in P2P mode
+      if (
+        connectionMode === "p2p" &&
+        actor &&
+        roomCode &&
+        overrideType !== "photo" &&
+        overrideType !== "document" &&
+        overrideType !== "location"
+      ) {
+        try {
+          await actor.sendGhostMessage(roomCode, myId, content);
+        } catch (_e) {
+          /* ignore */
+        }
+      }
     },
-    [input, deleteMode, myId],
+    [input, deleteMode, myId, connectionMode, actor, roomCode],
   );
 
   const handlePhotoFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -267,7 +461,6 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
   };
 
   const handleLocation = () => {
-    // Anonymized / randomized coords
     const lat = (37.0 + Math.random() * 5).toFixed(4);
     const lon = (28.0 + Math.random() * 10).toFixed(4);
     const coords = `${lat}°N ${lon}°E`;
@@ -283,12 +476,248 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
     return `${m}:${sec}`;
   };
 
-  const handleEndSession = () => {
+  const handleEndSession = async () => {
+    if (connectionMode === "p2p" && actor && roomCode) {
+      try {
+        await actor.closeGhostChannel(roomCode, myId);
+      } catch (_e) {
+        /* ignore */
+      }
+    }
     setEnded(true);
     setTimeout(() => onBack(), 2500);
   };
 
   const aiEmojis = getAiEmojis(input);
+
+  // ── SETUP SCREEN ──────────────────────────────────────────────────────────
+  if (connectionMode === "setup") {
+    const fingerprint =
+      passwordInput.trim().length >= 6
+        ? roomFingerprint(passwordInput.trim())
+        : null;
+    return (
+      <div
+        className="fixed inset-0 flex flex-col items-center justify-center p-6"
+        style={{ background: "linear-gradient(to bottom, #060812, #0a0f1e)" }}
+      >
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-sm space-y-6"
+        >
+          {/* Header */}
+          <div className="text-center space-y-2">
+            <div className="text-4xl">👻</div>
+            <h1
+              className="text-lg font-bold uppercase tracking-widest"
+              style={{ color: "#00fff7", fontFamily: "monospace" }}
+            >
+              GHOST CHAT
+            </h1>
+            <p className="text-xs text-white/40">
+              Şifreli oda ile partnere bağlan veya tek başına devam et
+            </p>
+          </div>
+
+          {/* Password Box */}
+          <div
+            className="rounded-2xl p-5 space-y-4"
+            style={{
+              background: "rgba(0,255,247,0.04)",
+              border: "1px solid rgba(0,255,247,0.2)",
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <Lock className="w-4 h-4" style={{ color: "#00fff7" }} />
+              <span
+                className="text-xs font-bold uppercase tracking-widest"
+                style={{ color: "#00fff7" }}
+              >
+                Şifreli Oda Bağlantısı
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              <input
+                type="password"
+                value={passwordInput}
+                onChange={(e) => {
+                  setPasswordInput(e.target.value);
+                  setPasswordError("");
+                }}
+                onKeyDown={(e) =>
+                  e.key === "Enter" && handleConnectWithPassword()
+                }
+                placeholder="Ortak şifrenizi girin (min. 6 karakter)"
+                className="w-full bg-transparent text-sm text-white placeholder-white/25 outline-none px-3 py-2.5 rounded-xl"
+                style={{ border: "1px solid rgba(0,255,247,0.25)" }}
+              />
+              {fingerprint && (
+                <div
+                  className="text-center text-[10px] font-mono tracking-widest py-1 rounded-lg"
+                  style={{
+                    color: "#a855f7",
+                    background: "rgba(168,85,247,0.08)",
+                    border: "1px solid rgba(168,85,247,0.2)",
+                  }}
+                >
+                  🔑 Oda Kimliği: {fingerprint}
+                </div>
+              )}
+              {passwordError && (
+                <p className="text-[11px] text-red-400">{passwordError}</p>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleConnectWithPassword}
+              disabled={passwordInput.trim().length < 6}
+              className="w-full py-3 rounded-xl text-sm font-bold uppercase tracking-wider transition-all disabled:opacity-30"
+              style={{
+                background:
+                  "linear-gradient(135deg, rgba(0,255,247,0.25), rgba(0,255,247,0.1))",
+                border: "1px solid rgba(0,255,247,0.5)",
+                color: "#00fff7",
+                boxShadow:
+                  passwordInput.trim().length >= 6
+                    ? "0 0 24px rgba(0,255,247,0.2)"
+                    : "none",
+              }}
+            >
+              🔗 Şifre ile Bağlan
+            </button>
+
+            <div className="text-[10px] text-white/30 space-y-0.5">
+              <p>• İki kullanıcı aynı şifreyi girerse otomatik bağlanır</p>
+              <p>• Oda maksimum 2 kişiyle sınırlı — izinsiz giriş engellenir</p>
+              <p>• Oturum kapanınca tüm mesajlar silinir</p>
+            </div>
+          </div>
+
+          {/* Divider */}
+          <div className="flex items-center gap-3">
+            <div
+              className="flex-1 h-px"
+              style={{ background: "rgba(255,255,255,0.08)" }}
+            />
+            <span className="text-[10px] text-white/25 uppercase tracking-wider">
+              veya
+            </span>
+            <div
+              className="flex-1 h-px"
+              style={{ background: "rgba(255,255,255,0.08)" }}
+            />
+          </div>
+
+          {/* Solo mode */}
+          <button
+            type="button"
+            onClick={() => setConnectionMode("solo")}
+            className="w-full py-3 rounded-xl text-sm font-bold uppercase tracking-wider transition-all"
+            style={{
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              color: "#a7b0c2",
+            }}
+          >
+            👤 Tek Başına Devam Et
+          </button>
+
+          {/* Back */}
+          <button
+            type="button"
+            onClick={onBack}
+            className="w-full text-xs text-white/20 hover:text-white/40 transition-colors"
+          >
+            ← Geri Dön
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // ── CONNECTING SCREEN ─────────────────────────────────────────────────────
+  if (connectionMode === "connecting") {
+    const fingerprint = roomFingerprint(passwordInput.trim());
+    return (
+      <div
+        className="fixed inset-0 flex flex-col items-center justify-center p-6"
+        style={{ background: "linear-gradient(to bottom, #060812, #0a0f1e)" }}
+      >
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="w-full max-w-sm text-center space-y-6"
+        >
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={{
+              duration: 2,
+              repeat: Number.POSITIVE_INFINITY,
+              ease: "linear",
+            }}
+            className="text-5xl mx-auto"
+          >
+            🔮
+          </motion.div>
+          <div className="space-y-2">
+            <p
+              className="text-sm font-bold uppercase tracking-widest"
+              style={{ color: "#00fff7", fontFamily: "monospace" }}
+            >
+              {connectingStatus}
+            </p>
+            <div
+              className="text-xs font-mono px-4 py-2 rounded-full mx-auto inline-block"
+              style={{
+                color: "#a855f7",
+                background: "rgba(168,85,247,0.1)",
+                border: "1px solid rgba(168,85,247,0.3)",
+              }}
+            >
+              {fingerprint}
+            </div>
+            <p className="text-[11px] text-white/30 mt-2">
+              Partnerinize bu oda kimliğini göstererek aynı şifreyi
+              doğrulayabilirsiniz
+            </p>
+          </div>
+
+          <div className="flex justify-center gap-1.5">
+            {[0, 1, 2].map((i) => (
+              <motion.div
+                key={i}
+                className="w-2 h-2 rounded-full"
+                style={{ background: "#00fff7" }}
+                animate={{ opacity: [0.2, 1, 0.2] }}
+                transition={{
+                  duration: 1.2,
+                  repeat: Number.POSITIVE_INFINITY,
+                  delay: i * 0.3,
+                }}
+              />
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (p2pPollRef.current) clearInterval(p2pPollRef.current);
+              setConnectionMode("setup");
+            }}
+            className="text-xs text-white/30 hover:text-white/50 transition-colors"
+          >
+            İptal
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // ── MAIN CHAT VIEW (solo or p2p) ──────────────────────────────────────────
+  const isP2P = connectionMode === "p2p";
 
   return (
     <div
@@ -341,16 +770,41 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
             <div className="flex items-center gap-1.5 mt-0.5">
               <span
                 className="w-1.5 h-1.5 rounded-full animate-pulse"
-                style={{ background: "#00ff88" }}
+                style={{ background: isP2P ? "#00ff88" : "#888" }}
               />
-              <span className="text-[10px] text-green-400 uppercase tracking-wider">
-                Ghost Kanal • E2E Şifreli
+              <span
+                className="text-[10px] uppercase tracking-wider"
+                style={{ color: isP2P ? "#00ff88" : "#666" }}
+              >
+                {isP2P ? (
+                  <span className="flex items-center gap-1">
+                    <Users className="w-3 h-3" /> P2P Şifreli Kanal
+                  </span>
+                ) : (
+                  "Ghost Kanal • Solo"
+                )}
               </span>
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          {isP2P && (
+            <div
+              className="text-[10px] px-2 py-1 rounded-full font-mono"
+              style={{
+                color: "#a855f7",
+                border: "1px solid rgba(168,85,247,0.3)",
+                background: "rgba(168,85,247,0.08)",
+              }}
+            >
+              🔑{" "}
+              {roomFingerprint(passwordInput.trim())
+                .split("-")
+                .slice(1)
+                .join("-")}
+            </div>
+          )}
           <div
             className="text-xs px-3 py-1 rounded-full"
             style={{
@@ -364,281 +818,210 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
           </div>
           <button
             type="button"
-            onClick={() => setShowEndConfirm(true)}
-            className="text-[10px] font-bold px-3 py-1.5 rounded-full uppercase tracking-widest transition-all hover:opacity-90"
+            onClick={() => setShowCallOverlay(true)}
+            className="w-8 h-8 rounded-full flex items-center justify-center transition-all"
             style={{
-              background: "rgba(255,50,80,0.15)",
-              border: "1px solid rgba(255,50,80,0.4)",
-              color: "#ff3250",
+              background: "rgba(0,255,136,0.08)",
+              border: "1px solid rgba(0,255,136,0.3)",
+              color: "#00ff88",
             }}
-            data-ocid="ghostchat.end_session.button"
+            data-ocid="ghostchat.call_button"
           >
-            SONLANDIR
+            <Phone className="w-3.5 h-3.5" />
           </button>
         </div>
       </header>
 
+      {/* P2P connected banner */}
+      {isP2P && (
+        <motion.div
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: "auto" }}
+          className="px-4 py-2 text-center text-[11px] font-bold uppercase tracking-wider"
+          style={{
+            background: "rgba(0,255,136,0.08)",
+            borderBottom: "1px solid rgba(0,255,136,0.2)",
+            color: "#00ff88",
+          }}
+        >
+          🔒 Şifreli P2P Kanal Aktif — Mesajlar uçtan uca şifreli
+        </motion.div>
+      )}
+
+      {/* Delete mode selector */}
+      <div
+        className="flex items-center gap-2 px-4 py-2 border-b shrink-0"
+        style={{
+          borderColor: "rgba(0,255,247,0.08)",
+          background: "rgba(6,8,18,0.9)",
+        }}
+      >
+        <span className="text-[10px] text-white/30 uppercase tracking-wider shrink-0">
+          Otomatik Sil:
+        </span>
+        {(["30s", "5m", "session"] as AutoDeleteMode[]).map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => setDeleteMode(opt)}
+            className="text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider transition-all"
+            style={{
+              background:
+                deleteMode === opt
+                  ? "rgba(0,255,247,0.18)"
+                  : "rgba(255,255,255,0.04)",
+              border:
+                deleteMode === opt
+                  ? "1px solid rgba(0,255,247,0.5)"
+                  : "1px solid rgba(255,255,255,0.1)",
+              color: deleteMode === opt ? "#00fff7" : "#a7b0c2",
+            }}
+            data-ocid={`ghostchat.${opt}_delete.toggle`}
+          >
+            {opt === "30s" ? "30 Sn" : opt === "5m" ? "5 Dk" : "Oturum"}
+          </button>
+        ))}
+      </div>
+
       {/* Messages */}
       <div
-        className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
         ref={scrollRef}
+        className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
       >
-        {/* Partner info banner */}
-        <div className="flex justify-center mb-2">
-          <div
-            className="text-[10px] px-3 py-1.5 rounded-full"
-            style={{
-              fontFamily: "monospace",
-              color: "#a855f7",
-              border: "1px solid rgba(168,85,247,0.25)",
-              background: "rgba(168,85,247,0.08)",
-            }}
-          >
-            🔮 {partnerId} bağlandı • Tüm iletiler uçtan uca şifreli
-          </div>
-        </div>
-
-        <AnimatePresence>
+        <AnimatePresence initial={false}>
           {messages.map((msg) => (
             <motion.div
               key={msg.id}
-              initial={{ opacity: 0, y: 10, scale: 0.95 }}
-              animate={{
-                opacity: msg.countdown !== null && msg.countdown <= 5 ? 0.4 : 1,
-                y: 0,
-                scale: 1,
-              }}
-              exit={{ opacity: 0, scale: 0.8, y: -10 }}
-              transition={{ duration: 0.25 }}
-              className={`flex ${msg.sender === "me" ? "justify-end" : "justify-start"}`}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className={`flex flex-col ${
+                msg.sender === "me" ? "items-end" : "items-start"
+              }`}
             >
               <div
-                className="max-w-[78%] rounded-2xl px-3 py-2.5 space-y-1.5"
+                className="max-w-[80%] rounded-2xl px-4 py-2.5 space-y-1"
                 style={{
                   background:
                     msg.sender === "me"
-                      ? "linear-gradient(135deg, rgba(0,255,247,0.12), rgba(0,255,247,0.06))"
-                      : "linear-gradient(135deg, rgba(168,85,247,0.15), rgba(168,85,247,0.07))",
+                      ? "linear-gradient(135deg, rgba(0,255,247,0.18), rgba(0,255,247,0.08))"
+                      : "rgba(255,255,255,0.06)",
                   border:
                     msg.sender === "me"
-                      ? "1px solid rgba(0,255,247,0.25)"
-                      : "1px solid rgba(168,85,247,0.3)",
-                  boxShadow:
-                    msg.sender === "me"
-                      ? "0 0 12px rgba(0,255,247,0.08)"
-                      : "0 0 12px rgba(168,85,247,0.08)",
+                      ? "1px solid rgba(0,255,247,0.3)"
+                      : "1px solid rgba(255,255,255,0.1)",
                 }}
               >
-                {/* Sender label */}
-                <div
-                  className="text-[9px] font-bold uppercase tracking-widest"
-                  style={{
-                    color: msg.sender === "me" ? "#00fff7" : "#a855f7",
-                    fontFamily: "monospace",
-                  }}
-                >
-                  {msg.senderLabel}
-                </div>
-
-                {/* Content by type */}
                 {msg.type === "text" && (
                   <p className="text-sm text-white leading-relaxed">
                     {msg.content}
                   </p>
                 )}
-
                 {msg.type === "photo" && (
-                  <div className="space-y-1.5">
-                    <div className="relative rounded-xl overflow-hidden">
+                  <div className="space-y-1">
+                    {msg.thumbnail && (
                       <img
                         src={msg.thumbnail}
-                        alt={msg.filename}
-                        className="w-48 h-32 object-cover block"
+                        alt=""
+                        className="rounded-xl max-w-full max-h-48 object-cover"
                       />
-                      <div
-                        className="absolute inset-0 flex items-center justify-center text-[10px] font-bold uppercase tracking-wider"
-                        style={{
-                          background: "rgba(0,0,0,0.45)",
-                          color: "#00ff88",
-                        }}
-                      >
-                        🔒 ŞİFRELİ
-                      </div>
-                    </div>
-                    <p className="text-[10px] text-white/60 truncate">
-                      {msg.filename}
-                    </p>
+                    )}
+                    <p className="text-[11px] text-white/50">{msg.filename}</p>
                   </div>
                 )}
-
                 {msg.type === "document" && (
-                  <div
-                    className="flex items-center gap-2 px-2.5 py-2 rounded-xl"
-                    style={{
-                      background: "rgba(0,255,247,0.06)",
-                      border: "1px solid rgba(0,255,247,0.15)",
-                    }}
-                  >
+                  <div className="flex items-center gap-2">
                     <FileText
-                      className="w-5 h-5 shrink-0"
-                      style={{ color: "#00fff7" }}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs text-white font-medium truncate">
-                        {msg.filename}
-                      </p>
-                      <p className="text-[9px] text-white/50">{msg.filesize}</p>
-                    </div>
-                    <span
-                      className="text-[8px] font-bold px-1.5 py-0.5 rounded-full shrink-0"
-                      style={{
-                        background: "rgba(0,255,136,0.12)",
-                        color: "#00ff88",
-                        border: "1px solid rgba(0,255,136,0.3)",
-                      }}
-                    >
-                      🔒 ŞİFRELİ
-                    </span>
-                  </div>
-                )}
-
-                {msg.type === "location" && (
-                  <div
-                    className="flex items-center gap-2 px-2.5 py-2 rounded-xl"
-                    style={{
-                      background: "rgba(168,85,247,0.08)",
-                      border: "1px solid rgba(168,85,247,0.25)",
-                    }}
-                  >
-                    <MapPin
                       className="w-5 h-5 shrink-0"
                       style={{ color: "#a855f7" }}
                     />
-                    <div className="flex-1">
-                      <p
-                        className="text-xs font-bold"
-                        style={{ color: "#a855f7", fontFamily: "monospace" }}
-                      >
-                        {msg.coords}
-                      </p>
-                      <p className="text-[9px] text-white/40">Anonim konum</p>
+                    <div>
+                      <p className="text-sm text-white">{msg.filename}</p>
+                      {msg.filesize && (
+                        <p className="text-[11px] text-white/40">
+                          {msg.filesize}
+                        </p>
+                      )}
                     </div>
+                  </div>
+                )}
+                {msg.type === "location" && (
+                  <div className="flex items-center gap-2">
+                    <MapPin
+                      className="w-4 h-4 shrink-0"
+                      style={{ color: "#00ff88" }}
+                    />
+                    <p className="text-sm text-white font-mono">
+                      {msg.content}
+                    </p>
+                  </div>
+                )}
+                {msg.countdown !== null && (
+                  <div className="flex items-center gap-1 mt-1">
                     <span
-                      className="text-[8px] font-bold px-1.5 py-0.5 rounded-full shrink-0"
+                      className="text-[10px]"
                       style={{
-                        background: "rgba(0,255,136,0.12)",
-                        color: "#00ff88",
-                        border: "1px solid rgba(0,255,136,0.3)",
+                        color: msg.countdown < 10 ? "#ff3250" : "#a7b0c2",
                       }}
                     >
-                      🔒 ANONİM
+                      ⏳ {msg.countdown}s
                     </span>
                   </div>
                 )}
-
-                {/* Countdown badge */}
-                {msg.countdown !== null && (
-                  <div
-                    className="flex items-center gap-1 text-[9px] font-bold"
-                    style={{
-                      color: msg.countdown <= 10 ? "#ff3250" : "#f59e0b",
-                    }}
-                  >
-                    {msg.countdown <= 10 ? "🔥" : "⏱"} {msg.countdown}s
-                  </div>
-                )}
-                {msg.deleteMode === "session" && (
-                  <div className="text-[9px] text-white/30">
-                    🔒 Oturum sonunda silinir
-                  </div>
-                )}
-                {msg.deleteMode === "5m" && msg.countdown === null && (
-                  <div className="text-[9px] text-white/30">
-                    ⏱ 5 dk sonra silinir
-                  </div>
-                )}
               </div>
+              <span className="text-[9px] text-white/20 mt-1 mx-1">
+                {msg.senderLabel}
+              </span>
             </motion.div>
           ))}
         </AnimatePresence>
-
-        {messages.length === 0 && (
-          <div
-            className="flex flex-col items-center justify-center py-20 text-center"
-            data-ocid="ghostchat.empty_state"
-          >
-            <div
-              className="text-5xl mb-4"
-              style={{ filter: "drop-shadow(0 0 20px rgba(0,255,247,0.4))" }}
-            >
-              👻
-            </div>
-            <p
-              className="text-sm font-bold uppercase tracking-widest mb-1"
-              style={{ color: "#00fff7" }}
-            >
-              Ghost Kanal Aktif
-            </p>
-            <p className="text-xs text-white/40">
-              Tüm mesajlar şifreli • Oturum sonunda otomatik silinir
-            </p>
-          </div>
-        )}
       </div>
+
+      {/* AI Emoji suggestions */}
+      {input.trim().length > 2 && (
+        <div
+          className="flex items-center gap-2 px-4 py-1.5 border-t shrink-0"
+          style={{
+            borderColor: "rgba(0,255,247,0.08)",
+            background: "rgba(6,8,18,0.9)",
+          }}
+        >
+          <span className="text-[10px] text-white/20 uppercase tracking-wider">
+            AI Öneri:
+          </span>
+          {aiEmojis.map((e) => (
+            <button
+              key={e}
+              type="button"
+              onClick={() => setInput((prev) => prev + e)}
+              className="text-lg hover:scale-125 transition-transform"
+            >
+              {e}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Emoji panel */}
       <AnimatePresence>
         {showEmojiPanel && (
           <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 10 }}
-            className="px-4 py-3 border-t"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="border-t px-4 py-3 shrink-0"
             style={{
-              borderColor: "rgba(0,255,247,0.1)",
-              background: "rgba(10,15,30,0.98)",
+              borderColor: "rgba(0,255,247,0.12)",
+              background: "rgba(6,8,18,0.97)",
             }}
-            data-ocid="ghostchat.popover"
           >
-            {input.trim() && (
-              <div className="mb-2">
-                <p
-                  className="text-[9px] uppercase tracking-widest mb-1.5"
-                  style={{ color: "#00fff7" }}
-                >
-                  ✨ AI Önerisi
-                </p>
-                <div className="flex gap-2">
-                  {aiEmojis.map((e) => (
-                    <button
-                      key={e}
-                      type="button"
-                      onClick={() => {
-                        setInput((p) => p + e);
-                      }}
-                      className="text-2xl hover:scale-125 transition-transform"
-                    >
-                      {e}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            <p
-              className="text-[9px] uppercase tracking-widest mb-2"
-              style={{ color: "#a855f7" }}
-            >
-              Emojiler
-            </p>
-            <div className="grid grid-cols-10 gap-1">
+            <div className="flex flex-wrap gap-2">
               {COMMON_EMOJIS.map((e) => (
                 <button
                   key={e}
                   type="button"
-                  onClick={() => {
-                    setInput((p) => p + e);
-                  }}
-                  className="text-xl hover:scale-125 transition-transform p-1"
+                  onClick={() => setInput((prev) => prev + e)}
+                  className="text-xl hover:scale-125 transition-transform"
                 >
                   {e}
                 </button>
@@ -652,105 +1035,71 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
       <AnimatePresence>
         {showAttachMenu && (
           <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 10 }}
-            className="px-4 py-3 border-t flex gap-3"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="border-t px-4 py-3 shrink-0"
             style={{
-              borderColor: "rgba(0,255,247,0.1)",
-              background: "rgba(10,15,30,0.98)",
+              borderColor: "rgba(168,85,247,0.2)",
+              background: "rgba(6,8,18,0.97)",
             }}
-            data-ocid="ghostchat.dropdown_menu"
           >
-            {(
-              [
-                {
-                  label: "📷 FOTOĞRAF",
-                  sub: "Resim gönder",
-                  color: "#00fff7",
-                  action: () => photoRef.current?.click(),
-                },
-                {
-                  label: "📄 BELGE",
-                  sub: "Dosya gönder",
-                  color: "#a855f7",
-                  action: () => docRef.current?.click(),
-                },
-                {
-                  label: "📍 KONUM",
-                  sub: "Anonim konum",
-                  color: "#00ff88",
-                  action: handleLocation,
-                },
-              ] as {
-                label: string;
-                sub: string;
-                color: string;
-                action: () => void;
-              }[]
-            ).map((item) => (
+            <div className="flex gap-3">
               <button
-                key={item.label}
                 type="button"
-                onClick={item.action}
-                className="flex-1 flex flex-col items-center gap-1 py-3 rounded-xl transition-all hover:opacity-90"
+                onClick={() => photoRef.current?.click()}
+                className="flex-1 flex flex-col items-center gap-1.5 py-3 rounded-xl transition-all"
                 style={{
-                  background: `${item.color}10`,
-                  border: `1px solid ${item.color}35`,
+                  background: "rgba(0,255,247,0.07)",
+                  border: "1px solid rgba(0,255,247,0.2)",
                 }}
               >
-                <span className="text-lg">{item.label.split(" ")[0]}</span>
+                <span className="text-xl">📸</span>
                 <span
-                  className="text-[10px] font-bold uppercase tracking-wider"
-                  style={{ color: item.color }}
+                  className="text-[10px] uppercase tracking-wider"
+                  style={{ color: "#00fff7" }}
                 >
-                  {item.label.split(" ")[1]}
+                  Fotoğraf
                 </span>
-                <span className="text-[9px] text-white/40">{item.sub}</span>
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={() => docRef.current?.click()}
+                className="flex-1 flex flex-col items-center gap-1.5 py-3 rounded-xl transition-all"
+                style={{
+                  background: "rgba(168,85,247,0.07)",
+                  border: "1px solid rgba(168,85,247,0.2)",
+                }}
+              >
+                <FileText className="w-5 h-5" style={{ color: "#a855f7" }} />
+                <span
+                  className="text-[10px] uppercase tracking-wider"
+                  style={{ color: "#a855f7" }}
+                >
+                  Belge
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={handleLocation}
+                className="flex-1 flex flex-col items-center gap-1.5 py-3 rounded-xl transition-all"
+                style={{
+                  background: "rgba(0,255,136,0.07)",
+                  border: "1px solid rgba(0,255,136,0.2)",
+                }}
+              >
+                <MapPin className="w-5 h-5" style={{ color: "#00ff88" }} />
+                <span
+                  className="text-[10px] uppercase tracking-wider"
+                  style={{ color: "#00ff88" }}
+                >
+                  Konum
+                </span>
+              </button>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* Delete mode selector */}
-      <div
-        className="flex items-center gap-2 px-4 py-2 border-t"
-        style={{
-          borderColor: "rgba(0,255,247,0.08)",
-          background: "rgba(6,8,18,0.9)",
-        }}
-      >
-        <span className="text-[9px] text-white/30 uppercase tracking-widest shrink-0">
-          Otomatik Sil:
-        </span>
-        {[
-          { id: "30s" as AutoDeleteMode, label: "🔥 30s" },
-          { id: "5m" as AutoDeleteMode, label: "⏱ 5dk" },
-          { id: "session" as AutoDeleteMode, label: "🔒 Oturum" },
-        ].map((opt) => (
-          <button
-            key={opt.id}
-            type="button"
-            onClick={() => setDeleteMode(opt.id)}
-            className="text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider transition-all"
-            style={{
-              background:
-                deleteMode === opt.id
-                  ? "rgba(0,255,247,0.18)"
-                  : "rgba(255,255,255,0.04)",
-              border:
-                deleteMode === opt.id
-                  ? "1px solid rgba(0,255,247,0.5)"
-                  : "1px solid rgba(255,255,255,0.1)",
-              color: deleteMode === opt.id ? "#00fff7" : "#a7b0c2",
-            }}
-            data-ocid={`ghostchat.${opt.id}_delete.toggle`}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
 
       {/* Input bar */}
       <div
@@ -808,7 +1157,9 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
               sendMessage();
             }
           }}
-          placeholder="Mesajını yaz... (şifreli)"
+          placeholder={
+            isP2P ? "P2P şifreli mesaj..." : "Mesajını yaz... (şifreli)"
+          }
           className="flex-1 bg-transparent text-sm text-white placeholder-white/25 outline-none px-3 py-2 rounded-xl"
           style={{ border: "1px solid rgba(0,255,247,0.15)" }}
           data-ocid="ghostchat.input"
@@ -863,7 +1214,8 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
               </h3>
               <p className="text-xs text-white/50 leading-relaxed">
                 Tüm mesajlar, dosyalar ve konum verileri kalıcı olarak
-                silinecek. Bu işlem geri alınamaz.
+                silinecek.
+                {isP2P && " P2P kanal da kapatılacak."}
               </p>
               <div className="flex gap-3">
                 <button
@@ -930,6 +1282,15 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Ghost Call Overlay */}
+      {showCallOverlay && (
+        <GhostCallOverlay
+          isOpen={showCallOverlay}
+          onClose={() => setShowCallOverlay(false)}
+          callerIds={[myId, partnerId]}
+        />
+      )}
     </div>
   );
 }

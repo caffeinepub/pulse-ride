@@ -1,8 +1,13 @@
+import PWAInstallBanner from "@/components/PWAInstallBanner";
 import { Toaster } from "@/components/ui/sonner";
 import DriverDashboard from "@/pages/DriverDashboard";
+import GhostAlarmSetupPage from "@/pages/GhostAlarmSetupPage";
 import GhostChatPage from "@/pages/GhostChatPage";
+import GhostDuelloPage from "@/pages/GhostDuelloPage";
+import GhostGroupPage from "@/pages/GhostGroupPage";
 import LandingPage from "@/pages/LandingPage";
 import LiveRideMapPage from "@/pages/LiveRideMapPage";
+import PulseMemoryBombPage from "@/pages/PulseMemoryBombPage";
 import RiderDashboard from "@/pages/RiderDashboard";
 import SecureCommPage from "@/pages/SecureCommPage";
 import SessionStart from "@/pages/SessionStart";
@@ -18,7 +23,11 @@ export type AppView =
   | "viral-mode"
   | "secure-comm"
   | "ghost-chat"
-  | "live-map";
+  | "live-map"
+  | "ghost-group"
+  | "ghost-duello"
+  | "memory-bomb"
+  | "ghost-alarm-setup";
 
 export interface SessionState {
   sessionId: string;
@@ -28,6 +37,7 @@ export interface SessionState {
 export default function App() {
   const [view, setView] = useState<AppView>("landing");
   const [session, setSession] = useState<SessionState | null>(null);
+  const [userPrice, setUserPrice] = useState<number | null>(null);
 
   const handleSessionCreated = (
     sessionId: string,
@@ -44,6 +54,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#060812] to-[#0a0f1e]">
+      <PWAInstallBanner />
       {view === "landing" && (
         <LandingPage
           onRideNow={() => setView("session-start-rider")}
@@ -51,6 +62,8 @@ export default function App() {
           onViralMode={() => setView("viral-mode")}
           onSecureComm={() => setView("secure-comm")}
           onGhostChat={() => setView("ghost-chat")}
+          onGhostGroup={() => setView("ghost-group")}
+          onGhostAlarm={() => setView("ghost-alarm-setup")}
         />
       )}
       {(view === "session-start-rider" || view === "session-start-driver") && (
@@ -65,6 +78,11 @@ export default function App() {
           session={session}
           onEndSession={handleEndSession}
           onLiveMap={() => setView("live-map")}
+          onGhostDuello={(price) => {
+            setUserPrice(price);
+            setView("ghost-duello");
+          }}
+          onMemoryBomb={() => setView("memory-bomb")}
         />
       )}
       {view === "driver" && session && (
@@ -84,6 +102,25 @@ export default function App() {
         <GhostChatPage onBack={() => setView("landing")} />
       )}
       {view === "live-map" && <LiveRideMapPage onBack={handleEndSession} />}
+      {view === "ghost-group" && (
+        <GhostGroupPage onBack={() => setView("landing")} />
+      )}
+      {view === "ghost-duello" && session && userPrice !== null && (
+        <GhostDuelloPage
+          userPrice={userPrice}
+          sessionId={session.sessionId}
+          onBack={() => setView("rider")}
+        />
+      )}
+      {view === "memory-bomb" && session && (
+        <PulseMemoryBombPage
+          sessionId={session.sessionId}
+          onBack={() => setView("rider")}
+        />
+      )}
+      {view === "ghost-alarm-setup" && (
+        <GhostAlarmSetupPage onBack={() => setView("landing")} />
+      )}
       <Toaster />
     </div>
   );

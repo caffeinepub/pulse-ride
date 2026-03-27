@@ -1,4 +1,5 @@
 import type { SessionState } from "@/App";
+import KarmicScore from "@/components/KarmicScore";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -505,255 +506,260 @@ export default function DriverDashboard({
           </div>
         ) : (
           /* In-Ride View */
-          <div className="space-y-4">
-            {/* Active ride price banner */}
-            <div
-              className="glass-card rounded-xl p-4 flex items-center justify-between"
-              style={{
-                borderColor: "rgba(46,230,214,0.3)",
-                background: "rgba(46,230,214,0.04)",
-              }}
-            >
-              <div>
-                <p className="text-[10px] text-[#a7b0c2] uppercase tracking-widest">
-                  AGREED FARE
-                </p>
-                <p className="text-2xl font-black" style={{ color: accent }}>
-                  ₺{activeRide.aiPrice}
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] text-[#a7b0c2]">
-                  {activeRide.distanceKm} km • {activeRide.durationMin} min
-                </p>
-                <span
-                  className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider"
-                  style={{
-                    background: `${trafficColor(activeRide.trafficLevel)}15`,
-                    color: trafficColor(activeRide.trafficLevel),
-                    border: `1px solid ${trafficColor(activeRide.trafficLevel)}35`,
-                  }}
-                >
-                  {activeRide.trafficLevel} TRAFFIC
-                </span>
-              </div>
-            </div>
+          <>
+            <KarmicScore sessionId={session.sessionId} userRole="driver" />
 
-            <div
-              className="glass-card rounded-xl p-4 animate-border-glow"
-              style={{ borderColor: "rgba(46,230,214,0.3)" }}
-            >
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <Navigation className="w-5 h-5" style={{ color: accent }} />
-                  <h2 className="text-sm font-bold uppercase tracking-widest text-white">
-                    AI NAVIGATION ACTIVE
-                  </h2>
-                </div>
-                {activeRide.isPhantom && (
-                  <div
-                    className="flex items-center gap-1.5 text-xs animate-phantom"
-                    style={{ color: "#a855ff" }}
-                  >
-                    <Ghost className="w-4 h-4" />
-                    PHANTOM PASSENGER
-                  </div>
-                )}
-              </div>
-              <Progress value={routeProgress} className="h-1.5 mb-3" />
-              <div className="space-y-2">
-                {NAV_STEPS.map((step, i) => (
-                  <div
-                    key={step}
-                    className={`flex items-center gap-2 text-xs transition-all ${
-                      i === navStep
-                        ? "text-white"
-                        : i < navStep
-                          ? "text-[#a7b0c2] line-through opacity-50"
-                          : "text-[#a7b0c2] opacity-30"
-                    }`}
-                  >
-                    <div
-                      className="w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0"
-                      style={{
-                        background:
-                          i <= navStep ? `${accent}20` : "transparent",
-                        border: `1px solid ${
-                          i <= navStep ? accent : "rgba(255,255,255,0.1)"
-                        }`,
-                      }}
-                    >
-                      {i < navStep ? (
-                        <span style={{ color: accent, fontSize: "9px" }}>
-                          ✓
-                        </span>
-                      ) : i === navStep ? (
-                        <div
-                          className="w-1.5 h-1.5 rounded-full animate-pulse"
-                          style={{ background: accent }}
-                        />
-                      ) : null}
-                    </div>
-                    {step}
-                  </div>
-                ))}
-              </div>
-              <div className="mt-4">
-                <Button
-                  onClick={handleCompleteRide}
-                  className="w-full btn-secondary rounded-full font-bold tracking-widest uppercase text-xs"
-                  data-ocid="driver.complete_ride.primary_button"
-                >
-                  COMPLETE RIDE
-                </Button>
-                {onLiveMap && (
-                  <button
-                    onClick={onLiveMap}
-                    className="w-full mt-2 py-3 font-mono font-black text-xs tracking-widest uppercase rounded-xl transition-all active:scale-95"
-                    style={{
-                      background: "rgba(0,255,255,0.1)",
-                      border: "1px solid rgba(0,255,255,0.4)",
-                      color: "#00ffff",
-                    }}
-                    type="button"
-                    data-ocid="driver.track_ride.button"
-                  >
-                    🗺️ TRACK RIDE
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Pulse Event */}
-            <AnimatePresence>
-              {pulseEvent && (
-                <motion.div
-                  key={pulseEvent.type}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  className="glass-card rounded-xl p-5"
-                  style={{ borderColor: "rgba(168,85,255,0.3)" }}
-                >
-                  {pulseEvent.type === "trivia" ? (
-                    <div>
-                      <p
-                        className="text-xs font-bold uppercase tracking-widest mb-3"
-                        style={{ color: "#a855ff" }}
-                      >
-                        ⚡ PULSE TRIVIA
-                      </p>
-                      <p className="text-sm text-white mb-3">
-                        {pulseEvent.question}
-                      </p>
-                      <div className="grid grid-cols-2 gap-2">
-                        {pulseEvent.options.map((opt, i) => (
-                          <button
-                            type="button"
-                            key={opt}
-                            onClick={() => setSelectedAnswer(i)}
-                            className="text-left text-xs px-3 py-2 rounded-lg transition-all"
-                            style={{
-                              background:
-                                selectedAnswer === i
-                                  ? i === pulseEvent.answer
-                                    ? "rgba(46,230,214,0.2)"
-                                    : "rgba(255,80,80,0.15)"
-                                  : "rgba(255,255,255,0.05)",
-                              border: `1px solid ${
-                                selectedAnswer === i
-                                  ? i === pulseEvent.answer
-                                    ? "#2ee6d6"
-                                    : "#ff5050"
-                                  : "rgba(255,255,255,0.1)"
-                              }`,
-                              color:
-                                selectedAnswer === i
-                                  ? i === pulseEvent.answer
-                                    ? "#2ee6d6"
-                                    : "#ff8080"
-                                  : "#a7b0c2",
-                            }}
-                          >
-                            {opt}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-[#a7b0c2]">
-                      {pulseEvent.message}
-                    </p>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setPulseEvent(null)}
-                    className="mt-3 text-[10px] text-[#a7b0c2] hover:text-white"
-                  >
-                    Dismiss
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Chat */}
-            <div
-              className="glass-card rounded-xl overflow-hidden"
-              style={{ borderColor: "rgba(46,230,214,0.2)" }}
-            >
-              <div className="px-5 py-3 border-b border-white/5">
-                <h2 className="text-xs font-bold uppercase tracking-widest text-white flex items-center gap-2">
-                  <Lock className="w-3.5 h-3.5" style={{ color: "#2ee6d6" }} />
-                  ENCRYPTED CHANNEL
-                </h2>
-              </div>
-              <div className="h-36 overflow-y-auto p-4 space-y-2">
-                {messages.length === 0 ? (
-                  <p
-                    className="text-xs text-[#a7b0c2] text-center py-4"
-                    data-ocid="driver.chat.empty_state"
-                  >
-                    No messages yet
+            <div className="space-y-4">
+              {/* Active ride price banner */}
+              <div
+                className="glass-card rounded-xl p-4 flex items-center justify-between"
+                style={{
+                  borderColor: "rgba(46,230,214,0.3)",
+                  background: "rgba(46,230,214,0.04)",
+                }}
+              >
+                <div>
+                  <p className="text-[10px] text-[#a7b0c2] uppercase tracking-widest">
+                    AGREED FARE
                   </p>
-                ) : (
-                  messages.map((msg, i) => (
+                  <p className="text-2xl font-black" style={{ color: accent }}>
+                    ₺{activeRide.aiPrice}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] text-[#a7b0c2]">
+                    {activeRide.distanceKm} km • {activeRide.durationMin} min
+                  </p>
+                  <span
+                    className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider"
+                    style={{
+                      background: `${trafficColor(activeRide.trafficLevel)}15`,
+                      color: trafficColor(activeRide.trafficLevel),
+                      border: `1px solid ${trafficColor(activeRide.trafficLevel)}35`,
+                    }}
+                  >
+                    {activeRide.trafficLevel} TRAFFIC
+                  </span>
+                </div>
+              </div>
+
+              <div
+                className="glass-card rounded-xl p-4 animate-border-glow"
+                style={{ borderColor: "rgba(46,230,214,0.3)" }}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Navigation className="w-5 h-5" style={{ color: accent }} />
+                    <h2 className="text-sm font-bold uppercase tracking-widest text-white">
+                      AI NAVIGATION ACTIVE
+                    </h2>
+                  </div>
+                  {activeRide.isPhantom && (
                     <div
-                      key={msg.text + String(i)}
-                      className={`text-xs px-3 py-1.5 rounded-lg max-w-[80%] ${
-                        msg.sender === session.sessionId
-                          ? "ml-auto bg-cyan-500/15 text-cyan-200"
-                          : "bg-purple-500/10 text-purple-200"
+                      className="flex items-center gap-1.5 text-xs animate-phantom"
+                      style={{ color: "#a855ff" }}
+                    >
+                      <Ghost className="w-4 h-4" />
+                      PHANTOM PASSENGER
+                    </div>
+                  )}
+                </div>
+                <Progress value={routeProgress} className="h-1.5 mb-3" />
+                <div className="space-y-2">
+                  {NAV_STEPS.map((step, i) => (
+                    <div
+                      key={step}
+                      className={`flex items-center gap-2 text-xs transition-all ${
+                        i === navStep
+                          ? "text-white"
+                          : i < navStep
+                            ? "text-[#a7b0c2] line-through opacity-50"
+                            : "text-[#a7b0c2] opacity-30"
                       }`}
                     >
-                      {msg.text}
+                      <div
+                        className="w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0"
+                        style={{
+                          background:
+                            i <= navStep ? `${accent}20` : "transparent",
+                          border: `1px solid ${
+                            i <= navStep ? accent : "rgba(255,255,255,0.1)"
+                          }`,
+                        }}
+                      >
+                        {i < navStep ? (
+                          <span style={{ color: accent, fontSize: "9px" }}>
+                            ✓
+                          </span>
+                        ) : i === navStep ? (
+                          <div
+                            className="w-1.5 h-1.5 rounded-full animate-pulse"
+                            style={{ background: accent }}
+                          />
+                        ) : null}
+                      </div>
+                      {step}
                     </div>
-                  ))
-                )}
+                  ))}
+                </div>
+                <div className="mt-4">
+                  <Button
+                    onClick={handleCompleteRide}
+                    className="w-full btn-secondary rounded-full font-bold tracking-widest uppercase text-xs"
+                    data-ocid="driver.complete_ride.primary_button"
+                  >
+                    COMPLETE RIDE
+                  </Button>
+                  {onLiveMap && (
+                    <button
+                      onClick={onLiveMap}
+                      className="w-full mt-2 py-3 font-mono font-black text-xs tracking-widest uppercase rounded-xl transition-all active:scale-95"
+                      style={{
+                        background: "rgba(0,255,255,0.1)",
+                        border: "1px solid rgba(0,255,255,0.4)",
+                        color: "#00ffff",
+                      }}
+                      type="button"
+                      data-ocid="driver.track_ride.button"
+                    >
+                      🗺️ TRACK RIDE
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="px-4 py-3 border-t border-white/5 flex gap-2">
-                <Input
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                  placeholder="Encrypted message..."
-                  className="flex-1 bg-white/5 border-white/10 text-white text-xs placeholder:text-white/30"
-                  data-ocid="driver.chat.input"
-                />
-                <Button
-                  onClick={handleSendMessage}
-                  size="sm"
-                  className="btn-primary text-white px-3"
-                  data-ocid="driver.chat.submit_button"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                </Button>
+
+              {/* Pulse Event */}
+              <AnimatePresence>
+                {pulseEvent && (
+                  <motion.div
+                    key={pulseEvent.type}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="glass-card rounded-xl p-5"
+                    style={{ borderColor: "rgba(168,85,255,0.3)" }}
+                  >
+                    {pulseEvent.type === "trivia" ? (
+                      <div>
+                        <p
+                          className="text-xs font-bold uppercase tracking-widest mb-3"
+                          style={{ color: "#a855ff" }}
+                        >
+                          ⚡ PULSE TRIVIA
+                        </p>
+                        <p className="text-sm text-white mb-3">
+                          {pulseEvent.question}
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                          {pulseEvent.options.map((opt, i) => (
+                            <button
+                              type="button"
+                              key={opt}
+                              onClick={() => setSelectedAnswer(i)}
+                              className="text-left text-xs px-3 py-2 rounded-lg transition-all"
+                              style={{
+                                background:
+                                  selectedAnswer === i
+                                    ? i === pulseEvent.answer
+                                      ? "rgba(46,230,214,0.2)"
+                                      : "rgba(255,80,80,0.15)"
+                                    : "rgba(255,255,255,0.05)",
+                                border: `1px solid ${
+                                  selectedAnswer === i
+                                    ? i === pulseEvent.answer
+                                      ? "#2ee6d6"
+                                      : "#ff5050"
+                                    : "rgba(255,255,255,0.1)"
+                                }`,
+                                color:
+                                  selectedAnswer === i
+                                    ? i === pulseEvent.answer
+                                      ? "#2ee6d6"
+                                      : "#ff8080"
+                                    : "#a7b0c2",
+                              }}
+                            >
+                              {opt}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-[#a7b0c2]">
+                        {pulseEvent.message}
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setPulseEvent(null)}
+                      className="mt-3 text-[10px] text-[#a7b0c2] hover:text-white"
+                    >
+                      Dismiss
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Chat */}
+              <div
+                className="glass-card rounded-xl overflow-hidden"
+                style={{ borderColor: "rgba(46,230,214,0.2)" }}
+              >
+                <div className="px-5 py-3 border-b border-white/5">
+                  <h2 className="text-xs font-bold uppercase tracking-widest text-white flex items-center gap-2">
+                    <Lock
+                      className="w-3.5 h-3.5"
+                      style={{ color: "#2ee6d6" }}
+                    />
+                    ENCRYPTED CHANNEL
+                  </h2>
+                </div>
+                <div className="h-36 overflow-y-auto p-4 space-y-2">
+                  {messages.length === 0 ? (
+                    <p
+                      className="text-xs text-[#a7b0c2] text-center py-4"
+                      data-ocid="driver.chat.empty_state"
+                    >
+                      No messages yet
+                    </p>
+                  ) : (
+                    messages.map((msg, i) => (
+                      <div
+                        key={msg.text + String(i)}
+                        className={`text-xs px-3 py-1.5 rounded-lg max-w-[80%] ${
+                          msg.sender === session.sessionId
+                            ? "ml-auto bg-cyan-500/15 text-cyan-200"
+                            : "bg-purple-500/10 text-purple-200"
+                        }`}
+                      >
+                        {msg.text}
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="px-4 py-3 border-t border-white/5 flex gap-2">
+                  <Input
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+                    placeholder="Encrypted message..."
+                    className="flex-1 bg-white/5 border-white/10 text-white text-xs placeholder:text-white/30"
+                    data-ocid="driver.chat.input"
+                  />
+                  <Button
+                    onClick={handleSendMessage}
+                    size="sm"
+                    className="btn-primary text-white px-3"
+                    data-ocid="driver.chat.submit_button"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
               </div>
             </div>
-          </div>
+          </>
         )}
       </div>
-
-      {/* Rating Modal */}
       <Dialog open={showRating} onOpenChange={setShowRating}>
         <DialogContent
           className="glass-card border-cyan-500/30 text-white"

@@ -18,6 +18,8 @@ interface LandingPageProps {
   onViralMode: () => void;
   onSecureComm: () => void;
   onGhostChat: () => void;
+  onGhostGroup: () => void;
+  onGhostAlarm?: () => void;
 }
 
 const WAVE_HEIGHTS = [
@@ -105,6 +107,8 @@ export default function LandingPage({
   onViralMode,
   onSecureComm,
   onGhostChat,
+  onGhostGroup,
+  onGhostAlarm,
 }: LandingPageProps) {
   const featuresRef = useRef<HTMLDivElement>(null);
 
@@ -291,6 +295,38 @@ export default function LandingPage({
               >
                 👻 GHOST CHAT
               </button>
+              <button
+                type="button"
+                onClick={onGhostGroup}
+                className="px-8 py-3.5 rounded-full font-bold tracking-widest uppercase text-sm flex items-center justify-center gap-2 transition-all hover:opacity-90"
+                style={{
+                  background:
+                    "linear-gradient(135deg, rgba(0,255,100,0.2), rgba(0,255,247,0.06))",
+                  border: "1px solid rgba(0,255,100,0.5)",
+                  color: "#00ff88",
+                  boxShadow: "0 0 20px rgba(0,255,100,0.15)",
+                }}
+                data-ocid="hero.ghost_group.button"
+              >
+                👥 GHOST GROUP
+              </button>
+              {onGhostAlarm && (
+                <button
+                  type="button"
+                  onClick={onGhostAlarm}
+                  className="px-8 py-3.5 rounded-full font-bold tracking-widest uppercase text-sm flex items-center justify-center gap-2 transition-all hover:opacity-90"
+                  style={{
+                    background:
+                      "linear-gradient(135deg, rgba(200,0,0,0.25), rgba(80,0,0,0.15))",
+                    border: "1px solid rgba(255,34,34,0.5)",
+                    color: "#ff2222",
+                    boxShadow: "0 0 20px rgba(255,34,34,0.15)",
+                  }}
+                  data-ocid="hero.ghost_alarm.button"
+                >
+                  🚨 GHOST ALARM
+                </button>
+              )}
             </div>
 
             <div className="flex items-center gap-4 pt-2">

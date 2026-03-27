@@ -6,8 +6,11 @@ import Int "mo:core/Int";
 import Principal "mo:core/Principal";
 import Iter "mo:core/Iter";
 import Map "mo:core/Map";
+import Time "mo:core/Time";
 import AccessControl "authorization/access-control";
 import MixinAuthorization "authorization/MixinAuthorization";
+
+
 
 actor {
   // --- Mixins and Prefabs (Don't touch!) ---
@@ -97,6 +100,24 @@ actor {
     messageCount : Nat;
   };
 
+  // --- Group Chat Channel Types ---
+  type GroupChatMember = {
+    sessionId : Text;
+    // role: Text; // Could be extended with member roles
+  };
+
+  type GroupChatMessage = {
+    senderSessionId : Text;
+    encryptedText : Text;
+    timestamp : Int;
+  };
+
+  type GroupChat = {
+    code : Text;
+    members : List.List<GroupChatMember>;
+    messages : List.List<GroupChatMessage>;
+  };
+
   // --- State Management ---
   let sessions = Map.empty<Text, Session>();
   var rideRequests = Map.empty<Text, RideRequest>();
@@ -106,6 +127,11 @@ actor {
 
   // P2P Ghost Channel state
   let ghostChannels = Map.empty<Text, GhostChannel>();
+
+  // Group Chat Channels state
+  let groupChats = Map.empty<Text, GroupChat>();
+
+  let maxGroupMembers = 10;
 
   func getSession(sessionId : Text) : Session {
     switch (sessions.get(sessionId)) {
@@ -154,6 +180,16 @@ actor {
       Runtime.trap("No session with id " # sessionId # " found.");
     };
     sessions.remove(sessionId);
+    // Also remove from group chats
+    for ((_, groupChat) in groupChats.entries()) {
+      let updatedMembers = groupChat.members.filter(func(m) { m.sessionId != sessionId });
+      let updatedChat : GroupChat = {
+        code = groupChat.code;
+        members = updatedMembers;
+        messages = groupChat.messages;
+      };
+      groupChats.add(groupChat.code, updatedChat);
+    };
     true;
   };
 
@@ -464,7 +500,6 @@ actor {
 
   public shared ({ caller }) func createGhostChannel(code : Text, sessionId : Text) : async Bool {
     // Any user including guests can create ghost channels
-    let _ = getSession(sessionId); // Verify session exists
     switch (ghostChannels.get(code)) {
       case (?existing) {
         // Code already taken
@@ -487,7 +522,6 @@ actor {
 
   public shared ({ caller }) func joinGhostChannel(code : Text, sessionId : Text) : async Text {
     // Any user including guests can join ghost channels
-    let _ = getSession(sessionId); // Verify session exists
     switch (ghostChannels.get(code)) {
       case (?channel) {
         if (channel.status == "waiting" and channel.session2 == null) {
@@ -531,7 +565,6 @@ actor {
 
   public shared ({ caller }) func sendGhostMessage(code : Text, senderSessionId : Text, encryptedText : Text) : async Bool {
     // Session-based authorization: only channel members can send
-    let _ = getSession(senderSessionId); // Verify session exists
     switch (ghostChannels.get(code)) {
       case (?channel) {
         if (channel.status != "connected") { 
@@ -582,7 +615,6 @@ actor {
 
   public shared ({ caller }) func closeGhostChannel(code : Text, sessionId : Text) : async Bool {
     // Session-based authorization: only channel members can close
-    let _ = getSession(sessionId); // Verify session exists
     switch (ghostChannels.get(code)) {
       case (?channel) {
         if (channel.session1 != sessionId and channel.session2 != ?sessionId) {
@@ -592,6 +624,149 @@ actor {
         true;
       };
       case (null) { false };
+    };
+  };
+
+  // --- Group Chat Channel Functions ---
+  public shared ({ caller }) func createGroupChannel(groupCode : Text, sessionId : Text) : async Bool {
+    // Any user including guests can create group channels
+    // Verify session exists first
+    let _ = getSession(sessionId);
+    
+    switch (groupChats.get(groupCode)) {
+      case (?existing) { false };
+      case (null) {
+        let newGroupMember : GroupChatMember = {
+          sessionId;
+        };
+
+        let newGroupChat : GroupChat = {
+          code = groupCode;
+          members = List.fromArray([newGroupMember]);
+          messages = List.empty<GroupChatMessage>();
+        };
+
+        groupChats.add(groupCode, newGroupChat);
+        true;
+      };
+    };
+  };
+
+  public shared ({ caller }) func joinGroupChannel(groupCode : Text, sessionId : Text) : async Text {
+    // Any user including guests can join group channels
+    // Verify session exists first
+    let _ = getSession(sessionId);
+    
+    switch (groupChats.get(groupCode)) {
+      case (?groupChat) {
+        let alreadyMember = groupChat.members.any(func(m) { m.sessionId == sessionId });
+        if (alreadyMember) {
+          return groupChat.members.size().toText();
+        };
+
+        if (groupChat.members.size() >= maxGroupMembers) {
+          return "full";
+        };
+
+        let newMember : GroupChatMember = {
+          sessionId;
+        };
+
+        groupChat.members.add(newMember);
+
+        let updatedGroup : GroupChat = {
+          code = groupCode;
+          members = groupChat.members;
+          messages = groupChat.messages;
+        };
+
+        groupChats.add(groupCode, updatedGroup);
+        groupChat.members.size().toText();
+      };
+      case (null) { "not_found" };
+    };
+  };
+
+  public shared ({ caller }) func sendGroupMessage(groupCode : Text, sessionId : Text, message : Text) : async Bool {
+    // Session-based authorization: only group members can send
+    switch (groupChats.get(groupCode)) {
+      case (?groupChat) {
+        let isMember = groupChat.members.any(func(m) { m.sessionId == sessionId });
+
+        if (not isMember) { Runtime.trap("Unauthorized: Only group members can send messages") };
+
+        let groupMessage : GroupChatMessage = {
+          senderSessionId = sessionId;
+          encryptedText = message;
+          timestamp = Time.now();
+        };
+
+        groupChat.messages.add(groupMessage);
+
+        let updatedGroup : GroupChat = {
+          code = groupCode;
+          members = groupChat.members;
+          messages = groupChat.messages;
+        };
+
+        groupChats.add(groupCode, updatedGroup);
+        true;
+      };
+      case (null) { false };
+    };
+  };
+
+  public query ({ caller }) func getGroupMessages(groupCode : Text, sessionId : Text, afterTimestamp : Int) : async [(Text, Text, Int)] {
+    // Session-based authorization: only group members can view
+    switch (groupChats.get(groupCode)) {
+      case (?groupChat) {
+        let isMember = groupChat.members.any(func(m) { m.sessionId == sessionId });
+        if (not isMember) { Runtime.trap("Unauthorized: Only group members can view messages") };
+        let filteredMessages = List.empty<(Text, Text, Int)>();
+        for (msg in groupChat.messages.toArray().vals()) {
+          if (msg.timestamp > afterTimestamp) {
+            filteredMessages.add((msg.senderSessionId, msg.encryptedText, msg.timestamp));
+          };
+        };
+        filteredMessages.toArray();
+      };
+      case (null) { [] };
+    };
+  };
+
+  public shared ({ caller }) func leaveGroupChannel(groupCode : Text, sessionId : Text) : async Bool {
+    // Session-based authorization: only group members can leave
+    switch (groupChats.get(groupCode)) {
+      case (?groupChat) {
+        let isMember = groupChat.members.any(func(m) { m.sessionId == sessionId });
+        if (not isMember) { Runtime.trap("Unauthorized: Only group members can leave/channel not found") };
+        let updatedMembers = groupChat.members.filter(func(m) { m.sessionId != sessionId });
+        let updatedGroup : GroupChat = {
+          code = groupCode;
+          members = updatedMembers;
+          messages = groupChat.messages;
+        };
+
+        groupChats.add(groupCode, updatedGroup);
+        true;
+      };
+      case (null) { false };
+    };
+  };
+
+  public query ({ caller }) func listGroupMembers(groupCode : Text, sessionId : Text) : async [Text] {
+    // Session-based authorization: only group members can view member list
+    switch (groupChats.get(groupCode)) {
+      case (?groupChat) {
+        let isMember = groupChat.members.any(func(m) { m.sessionId == sessionId });
+        if (not isMember) { 
+          Runtime.trap("Unauthorized: Only group members can view member list") 
+        };
+        groupChat.members.map<GroupChatMember, Text>(
+          func(m) { m.sessionId # "****" }
+        ).toArray();
+      };
+      case (null) { [] };
     };
   };
 };

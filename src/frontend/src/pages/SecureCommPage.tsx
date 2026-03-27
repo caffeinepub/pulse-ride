@@ -193,7 +193,7 @@ function P2PGhostChannel({
                 handleConnect();
               }
             } catch {}
-          }, 2000);
+          }, 1000);
         } else {
           // Channel exists — try to join
           const result = await actor.joinGhostChannel(manualCode, localId);
@@ -216,7 +216,7 @@ function P2PGhostChannel({
                   handleConnect();
                 }
               } catch {}
-            }, 2000);
+            }, 1000);
           } else if (result === "not_found") {
             setConnectError("Kod bulunamadı");
             setManualWaiting(false);
@@ -378,7 +378,7 @@ function P2PGhostChannel({
               }
             }
           } catch {}
-        }, 2000);
+        }, 1000);
       }
 
       return () => {
@@ -444,7 +444,7 @@ function P2PGhostChannel({
             handleConnect();
           }
         } catch {}
-      }, 2000);
+      }, 1000);
     } catch {}
   };
 

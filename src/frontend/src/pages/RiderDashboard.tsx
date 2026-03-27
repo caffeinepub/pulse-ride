@@ -1,4 +1,5 @@
 import type { SessionState } from "@/App";
+import KarmicScore from "@/components/KarmicScore";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -34,6 +35,8 @@ interface RiderDashboardProps {
   session: SessionState;
   onEndSession: () => void;
   onLiveMap?: () => void;
+  onGhostDuello?: (price: number) => void;
+  onMemoryBomb?: () => void;
 }
 
 interface AiPriceData {
@@ -107,6 +110,8 @@ export default function RiderDashboard({
   session,
   onEndSession,
   onLiveMap,
+  onGhostDuello,
+  onMemoryBomb,
 }: RiderDashboardProps) {
   const { actor } = useActor();
   const [reputation, setReputation] = useState<[string, number] | null>(null);
@@ -348,6 +353,8 @@ export default function RiderDashboard({
             </Button>
           </div>
         </div>
+
+        <KarmicScore sessionId={session.sessionId} userRole="rider" />
 
         {/* Reputation + Phantom mode toggle */}
         <div className="grid md:grid-cols-2 gap-4">
@@ -724,6 +731,36 @@ export default function RiderDashboard({
                   data-ocid="rider.live_map.button"
                 >
                   🗺️ LIVE MAP
+                </button>
+              )}
+              {onGhostDuello && aiPriceData && (
+                <button
+                  type="button"
+                  onClick={() => onGhostDuello(aiPriceData.price)}
+                  className="w-full mt-2 py-3 font-mono font-black text-xs tracking-widest uppercase rounded-xl transition-all active:scale-95"
+                  style={{
+                    background: "rgba(255,69,0,0.1)",
+                    border: "1px solid rgba(255,69,0,0.4)",
+                    color: "#ff4500",
+                  }}
+                  data-ocid="rider.ghost_duello.button"
+                >
+                  ⚔️ GHOST DÜELLO
+                </button>
+              )}
+              {onMemoryBomb && (
+                <button
+                  type="button"
+                  onClick={onMemoryBomb}
+                  className="w-full mt-2 py-3 font-mono font-black text-xs tracking-widest uppercase rounded-xl transition-all active:scale-95"
+                  style={{
+                    background: "rgba(168,85,247,0.1)",
+                    border: "1px solid rgba(168,85,247,0.4)",
+                    color: "#a855ff",
+                  }}
+                  data-ocid="rider.memory_bomb.button"
+                >
+                  💣 HAFIZA BOMBASI
                 </button>
               )}
             </motion.div>

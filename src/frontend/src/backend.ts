@@ -105,21 +105,27 @@ export interface backendInterface {
     checkGhostChannel(code: string): Promise<string>;
     closeGhostChannel(code: string, sessionId: string): Promise<boolean>;
     createGhostChannel(code: string, sessionId: string): Promise<boolean>;
+    createGroupChannel(groupCode: string, sessionId: string): Promise<boolean>;
     createRideRequest(riderSessionId: string, encryptedPickup: string, encryptedDropoff: string, phantomMode: boolean): Promise<[string, string]>;
     createSession(role: string): Promise<string>;
     endSession(sessionId: string): Promise<boolean>;
     getCallerUserProfile(): Promise<UserProfile | null>;
     getCallerUserRole(): Promise<UserRole>;
     getGhostMessages(code: string, sessionId: string, afterIndex: bigint): Promise<Array<[string, string, bigint]>>;
+    getGroupMessages(groupCode: string, sessionId: string, afterTimestamp: bigint): Promise<Array<[string, string, bigint]>>;
     getMessages(rideId: string, requesterSessionId: string): Promise<Array<[string, string, bigint]>>;
     getReputation(sessionId: string): Promise<[string, bigint]>;
     getUserProfile(user: Principal): Promise<UserProfile | null>;
     heartbeatQuery(): Promise<void>;
     isCallerAdmin(): Promise<boolean>;
     joinGhostChannel(code: string, sessionId: string): Promise<string>;
+    joinGroupChannel(groupCode: string, sessionId: string): Promise<string>;
+    leaveGroupChannel(groupCode: string, sessionId: string): Promise<boolean>;
     listAvailableRides(): Promise<Array<[string, string, boolean, string, bigint, bigint, bigint, string]>>;
+    listGroupMembers(groupCode: string, sessionId: string): Promise<Array<string>>;
     saveCallerUserProfile(profile: UserProfile): Promise<void>;
     sendGhostMessage(code: string, senderSessionId: string, encryptedText: string): Promise<boolean>;
+    sendGroupMessage(groupCode: string, sessionId: string, message: string): Promise<boolean>;
     sendMessage(rideId: string, senderSessionId: string, encryptedText: string): Promise<boolean>;
     submitRating(rideId: string, raterSessionId: string, stars: bigint): Promise<boolean>;
     updateRideStatus(rideId: string, sessionId: string, newStatus: string): Promise<boolean>;
@@ -225,6 +231,20 @@ export class Backend implements backendInterface {
             return result;
         }
     }
+    async createGroupChannel(arg0: string, arg1: string): Promise<boolean> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.createGroupChannel(arg0, arg1);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.createGroupChannel(arg0, arg1);
+            return result;
+        }
+    }
     async createRideRequest(arg0: string, arg1: string, arg2: string, arg3: boolean): Promise<[string, string]> {
         if (this.processError) {
             try {
@@ -312,6 +332,20 @@ export class Backend implements backendInterface {
             }
         } else {
             const result = await this.actor.getGhostMessages(arg0, arg1, arg2);
+            return result;
+        }
+    }
+    async getGroupMessages(arg0: string, arg1: string, arg2: bigint): Promise<Array<[string, string, bigint]>> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.getGroupMessages(arg0, arg1, arg2);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.getGroupMessages(arg0, arg1, arg2);
             return result;
         }
     }
@@ -405,6 +439,34 @@ export class Backend implements backendInterface {
             return result;
         }
     }
+    async joinGroupChannel(arg0: string, arg1: string): Promise<string> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.joinGroupChannel(arg0, arg1);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.joinGroupChannel(arg0, arg1);
+            return result;
+        }
+    }
+    async leaveGroupChannel(arg0: string, arg1: string): Promise<boolean> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.leaveGroupChannel(arg0, arg1);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.leaveGroupChannel(arg0, arg1);
+            return result;
+        }
+    }
     async listAvailableRides(): Promise<Array<[string, string, boolean, string, bigint, bigint, bigint, string]>> {
         if (this.processError) {
             try {
@@ -416,6 +478,20 @@ export class Backend implements backendInterface {
             }
         } else {
             const result = await this.actor.listAvailableRides();
+            return result;
+        }
+    }
+    async listGroupMembers(arg0: string, arg1: string): Promise<Array<string>> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.listGroupMembers(arg0, arg1);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.listGroupMembers(arg0, arg1);
             return result;
         }
     }
@@ -444,6 +520,20 @@ export class Backend implements backendInterface {
             }
         } else {
             const result = await this.actor.sendGhostMessage(arg0, arg1, arg2);
+            return result;
+        }
+    }
+    async sendGroupMessage(arg0: string, arg1: string, arg2: string): Promise<boolean> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.sendGroupMessage(arg0, arg1, arg2);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.sendGroupMessage(arg0, arg1, arg2);
             return result;
         }
     }
