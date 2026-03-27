@@ -1,6 +1,24 @@
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  MapContainer,
+  Marker,
+  Polyline,
+  TileLayer,
+  useMap,
+} from "react-leaflet";
 import { toast } from "sonner";
+
+// Fix leaflet default icon
+(L.Icon.Default.prototype as any)._getIconUrl = undefined;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl:
+    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+});
 
 type RidePhase =
   | "WAITING"
@@ -21,22 +39,6 @@ const DRIVER_START: Coord = { lat: 41.005, lng: 28.97 };
 
 const SESSION_ID = `GHOST-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 
-function lerp(a: number, b: number, t: number) {
-  return a + (b - a) * t;
-}
-
-function coordToCanvas(
-  coord: Coord,
-  canvasW: number,
-  canvasH: number,
-  center: Coord,
-  scale: number,
-) {
-  const x = canvasW / 2 + (coord.lng - center.lng) * scale;
-  const y = canvasH / 2 - (coord.lat - center.lat) * scale;
-  return { x, y };
-}
-
 const PHASE_LABELS: Record<RidePhase, string> = {
   WAITING: "PRE-MATCH — LOCATION BLURRED",
   MATCHED: "MATCH CONFIRMED — REVEALING...",
@@ -55,31 +57,79 @@ const PHASE_ORDER: RidePhase[] = [
   "COMPLETED",
 ];
 
+// Custom marker icons
+const pickupIcon = L.divIcon({
+  html: '<div style="background:#00ff88;width:16px;height:16px;border-radius:50%;border:2px solid #050a05;box-shadow:0 0 12px #00ff88;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:9px;color:#050a05;">A</div>',
+  className: "",
+  iconSize: [16, 16],
+  iconAnchor: [8, 8],
+});
+
+const destIcon = L.divIcon({
+  html: '<div style="background:#a855f7;width:16px;height:16px;border-radius:50%;border:2px solid #050a05;box-shadow:0 0 12px #a855f7;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:9px;color:#fff;">B</div>',
+  className: "",
+  iconSize: [16, 16],
+  iconAnchor: [8, 8],
+});
+
+const driverIcon = L.divIcon({
+  html: '<div style="font-size:24px;filter:drop-shadow(0 0 8px #00ff88);">🚗</div>',
+  className: "",
+  iconSize: [28, 28],
+  iconAnchor: [14, 14],
+});
+
+function DriverMarker({ phase }: { phase: RidePhase }) {
+  const map = useMap();
+  const markerRef = useRef<L.Marker | null>(null);
+  const posRef = useRef<Coord>({ ...DRIVER_START });
+
+  useEffect(() => {
+    const marker = L.marker([posRef.current.lat, posRef.current.lng], {
+      icon: driverIcon,
+    });
+    marker.addTo(map);
+    markerRef.current = marker;
+    return () => {
+      marker.remove();
+    };
+  }, [map]);
+
+  useEffect(() => {
+    const target =
+      phase === "WAITING" || phase === "MATCHED"
+        ? DRIVER_START
+        : phase === "DRIVER_APPROACHING" || phase === "ARRIVED_PICKUP"
+          ? PICKUP
+          : DESTINATION;
+
+    const interval = setInterval(() => {
+      posRef.current = {
+        lat: posRef.current.lat + (target.lat - posRef.current.lat) * 0.05,
+        lng: posRef.current.lng + (target.lng - posRef.current.lng) * 0.05,
+      };
+      markerRef.current?.setLatLng([posRef.current.lat, posRef.current.lng]);
+    }, 100);
+    return () => clearInterval(interval);
+  }, [phase]);
+
+  return null;
+}
+
 interface LiveRideMapPageProps {
   onBack?: () => void;
 }
 
 export default function LiveRideMapPage({ onBack }: LiveRideMapPageProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animFrameRef = useRef<number>(0);
-
   const [phase, setPhase] = useState<RidePhase>("WAITING");
-  const [_blurPx, setBlurPx] = useState(20);
   const [panicMode, setPanicMode] = useState(false);
   const [panicFlash, setPanicFlash] = useState(false);
   const [showWipe, setShowWipe] = useState(false);
-  const [eta, setEta] = useState(480); // seconds
+  const [eta, setEta] = useState(480);
   const [glitch, setGlitch] = useState(false);
 
-  // Driver position (interpolated)
   const driverPosRef = useRef<Coord>({ ...DRIVER_START });
-  const phaseStartRef = useRef<number>(Date.now());
   const phaseRef = useRef<RidePhase>("WAITING");
-  const blurRef = useRef(20);
-  const panicRef = useRef(false);
-
-  // Jitter for pre-match blur
-  const jitterRef = useRef({ x: 0, y: 0 });
 
   const triggerGlitch = useCallback(() => {
     setGlitch(true);
@@ -92,7 +142,6 @@ export default function LiveRideMapPage({ onBack }: LiveRideMapPageProps) {
       if (idx < PHASE_ORDER.length - 1) {
         const next = PHASE_ORDER[idx + 1];
         phaseRef.current = next;
-        phaseStartRef.current = Date.now();
         triggerGlitch();
         return next;
       }
@@ -103,11 +152,11 @@ export default function LiveRideMapPage({ onBack }: LiveRideMapPageProps) {
   // Phase auto-advance timer
   useEffect(() => {
     const timers: ReturnType<typeof setTimeout>[] = [];
-    timers.push(setTimeout(() => advancePhase(), 5000)); // WAITING → MATCHED
-    timers.push(setTimeout(() => advancePhase(), 16000)); // MATCHED → DRIVER_APPROACHING
-    timers.push(setTimeout(() => advancePhase(), 28000)); // → ARRIVED_PICKUP
-    timers.push(setTimeout(() => advancePhase(), 33000)); // → IN_RIDE
-    timers.push(setTimeout(() => advancePhase(), 48000)); // → COMPLETED
+    timers.push(setTimeout(() => advancePhase(), 5000));
+    timers.push(setTimeout(() => advancePhase(), 16000));
+    timers.push(setTimeout(() => advancePhase(), 28000));
+    timers.push(setTimeout(() => advancePhase(), 33000));
+    timers.push(setTimeout(() => advancePhase(), 48000));
     return () => timers.forEach(clearTimeout);
   }, [advancePhase]);
 
@@ -117,271 +166,23 @@ export default function LiveRideMapPage({ onBack }: LiveRideMapPageProps) {
     return () => clearInterval(id);
   }, []);
 
-  // Jitter update every 2s in WAITING
-  useEffect(() => {
-    if (phase !== "WAITING") return;
-    const id = setInterval(() => {
-      jitterRef.current = {
-        x: (Math.random() - 0.5) * 40,
-        y: (Math.random() - 0.5) * 40,
-      };
-    }, 2000);
-    return () => clearInterval(id);
-  }, [phase]);
-
-  // Blur decrease during MATCHED phase
-  useEffect(() => {
-    if (phase !== "MATCHED") return;
-    const id = setInterval(() => {
-      setBlurPx((p) => {
-        const next = Math.max(0, p - 2);
-        blurRef.current = next;
-        return next;
-      });
-    }, 200);
-    return () => clearInterval(id);
-  }, [phase]);
-
-  // Canvas draw loop
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d")!;
-
-    const resize = () => {
-      canvas.width = canvas.offsetWidth;
-      canvas.height = canvas.offsetHeight;
-    };
-    resize();
-    window.addEventListener("resize", resize);
-
-    const CENTER: Coord = {
-      lat: (PICKUP.lat + DESTINATION.lat) / 2,
-      lng: (PICKUP.lng + DESTINATION.lng) / 2,
-    };
-    const SCALE = 8000;
-
-    let t = 0;
-    const draw = () => {
-      t += 0.016;
-      const W = canvas.width;
-      const H = canvas.height;
-      const currentPhase = phaseRef.current;
-      const currentPanic = panicRef.current;
-
-      ctx.clearRect(0, 0, W, H);
-
-      // Background
-      ctx.fillStyle = "#050a05";
-      ctx.fillRect(0, 0, W, H);
-
-      if (currentPanic) {
-        // Panic overlay
-        ctx.filter = "blur(20px)";
-        ctx.fillStyle = "#0a0a0a";
-        ctx.fillRect(0, 0, W, H);
-        ctx.filter = "none";
-        animFrameRef.current = requestAnimationFrame(draw);
-        return;
-      }
-
-      // Grid
-      ctx.filter = "none";
-      ctx.strokeStyle = "#0d2010";
-      ctx.lineWidth = 1;
-      const gridSpacing = 60;
-      for (let x = 0; x < W; x += gridSpacing) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, H);
-        ctx.stroke();
-      }
-      for (let y = 0; y < H; y += gridSpacing) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(W, y);
-        ctx.stroke();
-      }
-
-      // Roads — diagonal/angled for cyberpunk feel
-      ctx.strokeStyle = "#1a1a1a";
-      ctx.lineWidth = 3;
-      const roads = [
-        [0.2, 0, 0.8, 1],
-        [0, 0.3, 1, 0.7],
-        [0.1, 0.6, 0.9, 0.4],
-        [0, 0.1, 0.5, 0.9],
-        [0.5, 0, 1, 0.6],
-      ];
-      for (const [x1r, y1r, x2r, y2r] of roads) {
-        ctx.beginPath();
-        ctx.moveTo(x1r * W, y1r * H);
-        ctx.lineTo(x2r * W, y2r * H);
-        ctx.stroke();
-      }
-
-      const pickupPx = coordToCanvas(PICKUP, W, H, CENTER, SCALE);
-      const destPx = coordToCanvas(DESTINATION, W, H, CENTER, SCALE);
-
-      const isRevealed =
-        currentPhase !== "WAITING" && currentPhase !== "MATCHED";
-
-      // Route line (post-match)
-      if (isRevealed) {
-        ctx.save();
-        ctx.strokeStyle = "#00ffff";
-        ctx.lineWidth = 2;
-        ctx.setLineDash([8, 6]);
-        ctx.shadowColor = "#00ffff";
-        ctx.shadowBlur = 6;
-        ctx.beginPath();
-        ctx.moveTo(pickupPx.x, pickupPx.y);
-        ctx.lineTo(destPx.x, destPx.y);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.restore();
-      }
-
-      // Driver position update
-      let driverTarget: Coord;
-      if (currentPhase === "WAITING" || currentPhase === "MATCHED") {
-        driverTarget = DRIVER_START;
-      } else if (
-        currentPhase === "DRIVER_APPROACHING" ||
-        currentPhase === "ARRIVED_PICKUP"
-      ) {
-        driverTarget = PICKUP;
-      } else {
-        driverTarget = DESTINATION;
-      }
-
-      driverPosRef.current = {
-        lat: lerp(driverPosRef.current.lat, driverTarget.lat, 0.01),
-        lng: lerp(driverPosRef.current.lng, driverTarget.lng, 0.01),
-      };
-
-      const driverPx = coordToCanvas(driverPosRef.current, W, H, CENTER, SCALE);
-
-      // Draw driver (with blur pre-match)
-      const currentBlur = blurRef.current;
-      if (currentPhase === "WAITING" || currentPhase === "MATCHED") {
-        const jx = driverPx.x + jitterRef.current.x;
-        const jy = driverPx.y + jitterRef.current.y;
-
-        // Radius circle
-        ctx.save();
-        ctx.strokeStyle = "rgba(0,255,136,0.2)";
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.arc(jx, jy, 80, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        // Blurred glow
-        ctx.filter = `blur(${currentBlur}px)`;
-        const grad = ctx.createRadialGradient(jx, jy, 0, jx, jy, 40);
-        grad.addColorStop(0, "rgba(0,255,136,0.8)");
-        grad.addColorStop(1, "rgba(0,255,136,0)");
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(jx, jy, 40, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.filter = "none";
-        ctx.restore();
-      } else {
-        // Car emoji
-        ctx.save();
-        ctx.font = "24px serif";
-        ctx.shadowColor = "#00ff88";
-        ctx.shadowBlur = 12;
-        // Bob animation
-        const bob = Math.sin(t * 3) * 2;
-        ctx.fillText("🚗", driverPx.x - 12, driverPx.y + 8 + bob);
-        ctx.restore();
-      }
-
-      // Pickup pin A
-      ctx.save();
-      ctx.shadowColor = "#00ff88";
-      ctx.shadowBlur = 16;
-      ctx.fillStyle = "#00ff88";
-      ctx.beginPath();
-      ctx.arc(pickupPx.x, pickupPx.y, 8, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#050a05";
-      ctx.font = "bold 9px monospace";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("A", pickupPx.x, pickupPx.y);
-      ctx.restore();
-
-      // Label A
-      ctx.fillStyle = "#00ff88";
-      ctx.font = "11px monospace";
-      ctx.textAlign = "left";
-      ctx.fillText("PICKUP", pickupPx.x + 12, pickupPx.y - 4);
-
-      // Destination pin B
-      ctx.save();
-      ctx.shadowColor = "#a855f7";
-      ctx.shadowBlur = 16;
-      ctx.fillStyle = "#a855f7";
-      ctx.beginPath();
-      ctx.arc(destPx.x, destPx.y, 8, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 9px monospace";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("B", destPx.x, destPx.y);
-      ctx.restore();
-
-      ctx.fillStyle = "#a855f7";
-      ctx.font = "11px monospace";
-      ctx.textAlign = "left";
-      ctx.fillText("DEST", destPx.x + 12, destPx.y - 4);
-
-      // Scan line effect
-      const scanY = (t * 80) % H;
-      const scanGrad = ctx.createLinearGradient(0, scanY - 2, 0, scanY + 2);
-      scanGrad.addColorStop(0, "rgba(0,255,136,0)");
-      scanGrad.addColorStop(0.5, "rgba(0,255,136,0.06)");
-      scanGrad.addColorStop(1, "rgba(0,255,136,0)");
-      ctx.fillStyle = scanGrad;
-      ctx.fillRect(0, scanY - 2, W, 4);
-
-      animFrameRef.current = requestAnimationFrame(draw);
-    };
-
-    animFrameRef.current = requestAnimationFrame(draw);
-    return () => {
-      cancelAnimationFrame(animFrameRef.current);
-      window.removeEventListener("resize", resize);
-    };
-  }, []);
-
   const handlePanic = useCallback(() => {
     setPanicFlash(true);
     setTimeout(() => setPanicFlash(false), 200);
     setPanicMode(true);
-    panicRef.current = true;
     triggerGlitch();
     toast.error("GHOST MODE ACTIVATED — Location hidden");
   }, [triggerGlitch]);
 
   const handleResumeTracking = useCallback(() => {
     setPanicMode(false);
-    panicRef.current = false;
     triggerGlitch();
     toast.success("Tracking resumed");
   }, [triggerGlitch]);
 
   const handleExit = useCallback(() => {
     setShowWipe(true);
-    toast("🗑️ GPS DATA WIPED — Session terminated", {
-      duration: 3000,
-    });
+    toast("🗑️ GPS DATA WIPED — Session terminated", { duration: 3000 });
     setTimeout(() => {
       if (onBack) onBack();
       else window.history.back();
@@ -449,8 +250,43 @@ export default function LiveRideMapPage({ onBack }: LiveRideMapPageProps) {
         )}
       </AnimatePresence>
 
-      {/* Canvas */}
-      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
+      {/* Leaflet Map */}
+      <div
+        className="absolute inset-0"
+        style={{ filter: panicMode ? "blur(20px)" : "none" }}
+      >
+        <MapContainer
+          center={[41.013, 28.984]}
+          zoom={14}
+          style={{ width: "100%", height: "100%" }}
+          zoomControl={false}
+          attributionControl={false}
+          dragging={false}
+          scrollWheelZoom={false}
+          doubleClickZoom={false}
+          touchZoom={false}
+        >
+          <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />
+          <Marker position={[PICKUP.lat, PICKUP.lng]} icon={pickupIcon} />
+          <Marker
+            position={[DESTINATION.lat, DESTINATION.lng]}
+            icon={destIcon}
+          />
+          <Polyline
+            positions={[
+              [PICKUP.lat, PICKUP.lng],
+              [DESTINATION.lat, DESTINATION.lng],
+            ]}
+            pathOptions={{
+              color: "#00ffff",
+              weight: 2,
+              dashArray: "8 6",
+              opacity: isRevealed ? 1 : 0,
+            }}
+          />
+          <DriverMarker phase={phase} />
+        </MapContainer>
+      </div>
 
       {/* Glitch overlay */}
       <AnimatePresence>
@@ -527,7 +363,6 @@ export default function LiveRideMapPage({ onBack }: LiveRideMapPageProps) {
 
       {/* HUD — Top bar */}
       <div className="absolute top-0 left-0 right-0 z-20 flex items-start justify-between p-3 pointer-events-none">
-        {/* Session ID */}
         <div
           className="font-mono text-xs tracking-widest px-3 py-1.5 rounded-full pointer-events-auto"
           style={{
@@ -540,7 +375,6 @@ export default function LiveRideMapPage({ onBack }: LiveRideMapPageProps) {
           {SESSION_ID}
         </div>
 
-        {/* Phase label */}
         <div
           className={`font-mono text-xs tracking-widest px-3 py-1.5 rounded-full ${
             glitch ? "animate-pulse" : ""
@@ -554,7 +388,6 @@ export default function LiveRideMapPage({ onBack }: LiveRideMapPageProps) {
           {panicMode ? "👻 GHOST MODE" : PHASE_LABELS[phase]}
         </div>
 
-        {/* ETA */}
         <div
           className="font-mono text-xs tracking-widest px-3 py-1.5 rounded-full pointer-events-auto"
           style={{
@@ -611,7 +444,9 @@ export default function LiveRideMapPage({ onBack }: LiveRideMapPageProps) {
                     ? "rgba(0,255,136,0.1)"
                     : "rgba(255,165,0,0.1)",
                   color: isRevealed ? "#00ff88" : "#f59e0b",
-                  border: `1px solid ${isRevealed ? "rgba(0,255,136,0.3)" : "rgba(255,165,0,0.3)"}`,
+                  border: `1px solid ${
+                    isRevealed ? "rgba(0,255,136,0.3)" : "rgba(255,165,0,0.3)"
+                  }`,
                 }}
               >
                 {isRevealed ? "EXACT" : "BLURRED"}

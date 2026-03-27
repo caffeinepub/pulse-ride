@@ -1,42 +1,48 @@
-# PulseRide — Ghost Chat In-Ride Integration
+# PulseRide — v22: Auto Location & Professional Map
 
 ## Current State
-- GhostChatPage exists as a standalone page with full Ghost Chat features (P2P password-based channels, auto-delete, emoji, attachments, voice call)
-- RiderDashboard has rideStatus states: idle, pricing, searching, active, completed
-- DriverDashboard has activeRide state (null when no ride, populated when driver accepts a ride)
-- No Ghost Chat exists inside either dashboard — only accessible from main landing page
+- RiderDashboard has two manual inputs: PICKUP ZONE and DROPOFF ZONE (both free text)
+- LiveRideMapPage uses a custom Canvas-based renderer with a dark grid, static hardcoded Istanbul coordinates, and no real map tiles
+- No geolocation auto-detection exists
 
 ## Requested Changes (Diff)
 
 ### Add
-- Embedded Ghost Chat modal/overlay in RiderDashboard that opens when rideStatus === "active" or "searching" (after price approval and ride is active)
-- Embedded Ghost Chat modal/overlay in DriverDashboard that opens when activeRide is not null (after driver accepts a ride)
-- 💬 GHOST CHAT button in the in-ride section of RiderDashboard (alongside LIVE MAP, GHOST DÜELLO, HAFIZA BOMBASI buttons)
-- 💬 GHOST CHAT button in the active ride section of DriverDashboard (in the navigation/controls area)
-- The chat channel is automatically keyed to the rideId so driver and rider auto-connect without manual password entry
-- Both sides auto-join the same room using rideId as the shared channel key (no password screen needed — silent auto-connect)
-- Full Ghost Chat features available in-ride: real-time messaging, emoji, attachments (photo/document/location), auto-delete timer, AI emoji suggestions, send/receive messages
-- Ghost Call button available within the in-ride chat overlay
-- Chat overlay is a full-screen modal with cyberpunk styling matching existing UI
+- Browser Geolocation API auto-detection on RiderDashboard mount
+- "Detecting location..." loading state while geolocation resolves
+- Display detected location as "GPS SECURED" badge showing approximate neighborhood/coords
+- Leaflet.js map in LiveRideMapPage using OpenStreetMap tiles, replacing canvas renderer
+- Leaflet map shows: pickup pin (A), destination pin (B), animated driver marker (🚗), route polyline
+- Retain all existing cyberpunk HUD overlays on top of the Leaflet map
 
 ### Modify
-- RiderDashboard: accept rideId prop (already exists as state) and pass to in-ride Ghost Chat
-- DriverDashboard: use activeRide.rideId as the shared channel key
+- RiderDashboard ride form: remove PICKUP ZONE input; keep only DROPOFF/DESTINATION input
+- calcAiPrice: use detected GPS coords for distance calculation (realistic km based on lat/lng)
+- LiveRideMapPage: swap canvas for Leaflet map component with dark/cyberpunk tile layer (CartoDB DarkMatter)
+- Driver position animation: use Leaflet marker that moves smoothly via repeated setLatLng
+- Pre-match phase: show blurred/approximate pickup location on map
+- Post-match: show exact route and animated driver marker
 
 ### Remove
-- Nothing removed
+- ENCRYPTED PICKUP ZONE input field from RiderDashboard
+- Canvas element and all canvas draw loop code from LiveRideMapPage
+- Hardcoded PICKUP/DESTINATION/DRIVER_START coords in LiveRideMapPage
 
 ## Implementation Plan
-1. Create a new `InRideGhostChat` component (in `src/frontend/src/components/InRideGhostChat.tsx`) that:
-   - Accepts props: `rideId: string`, `myId: string`, `role: "rider" | "driver"`, `onClose: () => void`
-   - Auto-connects on mount using `rideId` as channel code (format: `ride-${rideId}`)
-   - Reuses the same backend logic as GhostChatPage (createGroupChannel/joinGroupChannel/getGroupMessages/sendGroupMessage/listGroupMembers)
-   - Shows full chat UI: message list, input, emoji panel, attach menu, auto-delete timer selector
-   - Includes 📞 GHOST CALL button that opens GhostCallOverlay
-   - Auto-join flow: rider creates channel (first to join ride), driver joins; both connect automatically without password UI
-   - Shows connection status while connecting ("Sürücü bekleniyor..." / "Yolcuya bağlanıyor...")
-   - Cyberpunk styling matching existing app
-2. Add `showGhostChat` state + GHOST CHAT button in RiderDashboard in-ride section (rideStatus === "active" or "searching")
-3. Add `showGhostChat` state + GHOST CHAT button in DriverDashboard active ride section
-4. Render `<InRideGhostChat>` as fullscreen overlay when showGhostChat is true in both dashboards
-5. Channel is cleaned up (leaveGroupChannel) when overlay closes or component unmounts
+1. RiderDashboard.tsx:
+   - On mount call `navigator.geolocation.getCurrentPosition`
+   - Store detected coords in state (`detectedLocation: {lat, lng, label}`)  
+   - Show spinner/badge during detection; fallback gracefully if denied
+   - Remove pickupZone state and input; pass detected coords to calcAiPrice
+   - calcAiPrice updated to accept optional lat/lng for realistic distance
+   - Submit ride with detected GPS coords (encrypted label)
+
+2. LiveRideMapPage.tsx:
+   - Replace canvas with react-leaflet MapContainer + TileLayer (CartoDB DarkMatter tiles)
+   - Add custom CSS for leaflet dark theme inside component
+   - Pickup marker (green pin), Destination marker (purple pin)
+   - Driver marker starts at DRIVER_START, animates to PICKUP then DESTINATION via useEffect interval
+   - Route polyline between pickup and destination (cyan dashed)
+   - Pre-match: driver marker hidden/blurred using CSS filter on map container
+   - All existing HUD overlays (panic, phase labels, ETA, bottom panel) remain as absolute positioned divs on top
+   - Map tiles: `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png`

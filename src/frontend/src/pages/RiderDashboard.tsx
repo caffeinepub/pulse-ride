@@ -16,6 +16,7 @@ import {
   Ghost,
   Lock,
   LogOut,
+  MapPin,
   Send,
   Share2,
   Shield,
@@ -45,6 +46,12 @@ interface AiPriceData {
   distanceKm: number;
   durationMin: number;
   trafficLevel: string;
+}
+
+interface DetectedLocation {
+  lat: number;
+  lng: number;
+  label: string;
 }
 
 const MOODS = [
@@ -77,16 +84,33 @@ function formatTime(seconds: number): string {
   return `${m}:${s}`;
 }
 
-function calcAiPrice(pickup: string, dropoff: string): AiPriceData {
-  const distance = (((pickup.length + dropoff.length + 2) * 2) % 30) + 2;
-  const duration = distance * 3;
-  const trafficIndex = distance % 3;
+function calcAiPrice(
+  dropoff: string,
+  coords?: { lat: number; lng: number } | null,
+): AiPriceData {
+  let distance: number;
+  if (coords) {
+    // Use coords for more realistic distance calculation from Istanbul center
+    const centerLat = 41.0082;
+    const centerLng = 28.9784;
+    const dlat = coords.lat - centerLat;
+    const dlng = coords.lng - centerLng;
+    const rawDist = Math.sqrt(dlat * dlat + dlng * dlng) * 111;
+    // Add dropoff entropy
+    const entropy = (dropoff.length * 1.7) % 18;
+    distance = Math.max(2, Math.min(30, rawDist + entropy + 3));
+    distance = Math.round(distance * 10) / 10;
+  } else {
+    distance = ((dropoff.length * 2) % 30) + 2;
+  }
+  const duration = Math.round(distance * 3);
+  const trafficIndex = Math.round(distance) % 3;
   const trafficLevel =
     trafficIndex === 0 ? "Low" : trafficIndex === 1 ? "Moderate" : "High";
   const trafficBonus =
     trafficLevel === "High" ? 450 : trafficLevel === "Moderate" ? 250 : 0;
   const rawPrice = 1000 + distance * 120 + duration * 3 + trafficBonus;
-  const price = Math.min(2800, Math.max(800, rawPrice));
+  const price = Math.min(2800, Math.max(800, Math.round(rawPrice)));
   return { price, distanceKm: distance, durationMin: duration, trafficLevel };
 }
 
@@ -116,7 +140,11 @@ export default function RiderDashboard({
 }: RiderDashboardProps) {
   const { actor } = useActor();
   const [reputation, setReputation] = useState<[string, number] | null>(null);
-  const [pickupZone, setPickupZone] = useState("");
+  const [detectedLocation, setDetectedLocation] =
+    useState<DetectedLocation | null>(null);
+  const [locationStatus, setLocationStatus] = useState<
+    "detecting" | "found" | "denied"
+  >("detecting");
   const [dropoffZone, setDropoffZone] = useState("");
   const [phantomMode, setPhantomMode] = useState(false);
   const [rideId, setRideId] = useState<string | null>(null);
@@ -135,6 +163,39 @@ export default function RiderDashboard({
   const [sessionTerminated, setSessionTerminated] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const phantomRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Auto-detect passenger location on mount
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setLocationStatus("denied");
+      setDetectedLocation({
+        lat: 41.0082,
+        lng: 28.9784,
+        label: "ISTANBUL-41.0082°N",
+      });
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude: lat, longitude: lng } = pos.coords;
+        setDetectedLocation({
+          lat,
+          lng,
+          label: `${lat.toFixed(4)}°N ${lng.toFixed(4)}°E`,
+        });
+        setLocationStatus("found");
+      },
+      () => {
+        setLocationStatus("denied");
+        setDetectedLocation({
+          lat: 41.0082,
+          lng: 28.9784,
+          label: "ISTANBUL-41.0082°N",
+        });
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 },
+    );
+  }, []);
 
   useEffect(() => {
     if (!actor) return;
@@ -171,18 +232,19 @@ export default function RiderDashboard({
   }, [phantomMode, rideId]);
 
   const handleCalculatePrice = useCallback(async () => {
-    if (!actor || !pickupZone.trim() || !dropoffZone.trim()) return;
+    if (!actor || !dropoffZone.trim()) return;
     setLoading(true);
+    const pickupLabel = detectedLocation?.label ?? "ISTANBUL-41.0082°N";
     try {
       const [rid, code] = await actor.createRideRequest(
         session.sessionId,
-        pickupZone,
+        pickupLabel,
         dropoffZone,
         phantomMode,
       );
       setRideId(rid);
       setSessionCode(code);
-      const priceData = calcAiPrice(pickupZone, dropoffZone);
+      const priceData = calcAiPrice(dropoffZone, detectedLocation);
       setAiPriceData(priceData);
       setRideStatus("pricing");
       toast.success("AI pricing calculated — review before approving");
@@ -191,7 +253,7 @@ export default function RiderDashboard({
     } finally {
       setLoading(false);
     }
-  }, [actor, pickupZone, dropoffZone, phantomMode, session.sessionId]);
+  }, [actor, dropoffZone, phantomMode, session.sessionId, detectedLocation]);
 
   const handleApproveRide = useCallback(async () => {
     if (!actor || !rideId) return;
@@ -401,35 +463,136 @@ export default function RiderDashboard({
                 REQUEST RIDE
               </h2>
               <div className="space-y-4">
-                <div>
-                  <Label className="text-xs uppercase tracking-wider text-[#a7b0c2] mb-2 block">
-                    ENCRYPTED PICKUP ZONE
-                  </Label>
-                  <Input
-                    value={pickupZone}
-                    onChange={(e) => setPickupZone(e.target.value)}
-                    placeholder="Enter zone code (e.g. ALPHA-7, ZONE-B3)"
-                    className="bg-white/5 border-white/10 text-white placeholder:text-white/30 focus:border-purple-500/50"
-                    data-ocid="rider.pickup_zone.input"
-                  />
+                {/* GPS Auto-Detection Panel */}
+                <div
+                  className="rounded-xl p-4"
+                  style={{
+                    background: "rgba(0,255,136,0.05)",
+                    border: `1px solid ${
+                      locationStatus === "found"
+                        ? "rgba(0,255,136,0.4)"
+                        : locationStatus === "denied"
+                          ? "rgba(239,68,68,0.35)"
+                          : "rgba(0,255,136,0.2)"
+                    }`,
+                    boxShadow:
+                      locationStatus === "found"
+                        ? "0 0 16px rgba(0,255,136,0.08)"
+                        : "none",
+                  }}
+                  data-ocid="rider.gps_location.panel"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <MapPin
+                        className="w-4 h-4"
+                        style={{
+                          color:
+                            locationStatus === "found"
+                              ? "#00ff88"
+                              : locationStatus === "denied"
+                                ? "#ef4444"
+                                : "#a7b0c2",
+                        }}
+                      />
+                      <span className="text-xs font-bold uppercase tracking-widest text-[#a7b0c2]">
+                        PICKUP LOCATION
+                      </span>
+                    </div>
+                    {/* Status badge */}
+                    {locationStatus === "detecting" && (
+                      <div
+                        className="flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider"
+                        style={{
+                          background: "rgba(245,158,11,0.12)",
+                          border: "1px solid rgba(245,158,11,0.35)",
+                          color: "#f59e0b",
+                        }}
+                      >
+                        <span
+                          className="w-2 h-2 rounded-full animate-ping inline-block"
+                          style={{ background: "#f59e0b" }}
+                        />
+                        DETECTING
+                      </div>
+                    )}
+                    {locationStatus === "found" && (
+                      <div
+                        className="flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider"
+                        style={{
+                          background: "rgba(0,255,136,0.12)",
+                          border: "1px solid rgba(0,255,136,0.4)",
+                          color: "#00ff88",
+                        }}
+                      >
+                        ✓ GPS LOCKED
+                      </div>
+                    )}
+                    {locationStatus === "denied" && (
+                      <div
+                        className="flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider"
+                        style={{
+                          background: "rgba(239,68,68,0.12)",
+                          border: "1px solid rgba(239,68,68,0.35)",
+                          color: "#f87171",
+                        }}
+                      >
+                        ⚠ APPROX
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Coordinates display */}
+                  <div
+                    className="font-mono text-sm tracking-wider"
+                    style={{
+                      color:
+                        locationStatus === "found"
+                          ? "#00ff88"
+                          : locationStatus === "denied"
+                            ? "#f87171"
+                            : "#a7b0c2",
+                    }}
+                  >
+                    {locationStatus === "detecting" ? (
+                      <span className="flex items-center gap-2">
+                        <span
+                          className="inline-block w-3 h-3 rounded-full animate-spin border-2 border-t-transparent"
+                          style={{
+                            borderColor: "#f59e0b",
+                            borderTopColor: "transparent",
+                          }}
+                        />
+                        Acquiring GPS signal...
+                      </span>
+                    ) : (
+                      <span>📍 {detectedLocation?.label}</span>
+                    )}
+                  </div>
+
+                  {locationStatus === "denied" && (
+                    <p className="text-[10px] text-[#a7b0c2] mt-1">
+                      GPS unavailable — using approximate Istanbul location
+                    </p>
+                  )}
                 </div>
+
+                {/* Destination input */}
                 <div>
                   <Label className="text-xs uppercase tracking-wider text-[#a7b0c2] mb-2 block">
-                    ENCRYPTED DROPOFF ZONE
+                    DESTINATION ADDRESS
                   </Label>
                   <Input
                     value={dropoffZone}
                     onChange={(e) => setDropoffZone(e.target.value)}
-                    placeholder="Enter destination zone (e.g. BETA-12, ZONE-D9)"
+                    placeholder="Enter destination (e.g. Taksim, Kadıköy, Airport)"
                     className="bg-white/5 border-white/10 text-white placeholder:text-white/30 focus:border-purple-500/50"
                     data-ocid="rider.dropoff_zone.input"
                   />
                 </div>
                 <Button
                   onClick={handleCalculatePrice}
-                  disabled={
-                    loading || !pickupZone.trim() || !dropoffZone.trim()
-                  }
+                  disabled={loading || !dropoffZone.trim()}
                   className="btn-primary w-full rounded-full py-3 font-bold tracking-widest uppercase text-sm text-white"
                   data-ocid="rider.calculate_price.button"
                 >
