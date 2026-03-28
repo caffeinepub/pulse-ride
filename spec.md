@@ -1,32 +1,32 @@
-# PulseRide v29 — Profesyonellik Paketi
+# PulseRide — Teslimat Entegrasyonu (Tek Sayfa)
 
 ## Current State
-- Tek sayfa Uber-style layout (HomePage) — harita arka plan, sol üst Yolcu/Şoför toggle
-- LiveRideMapPage: SEARCH → CONFIRM → RIDING faz makinesi, Leaflet harita, OSRM rota, araç animasyonu
-- Tüm ghost özellikler (GHOST CHAT, GHOST COMM, GHOST GROUP, GHOST ALARM, GHOST DÜELLO vb.) mevcut
-- Alt navigasyon çubuğu, PWA desteği, Uber/Yandex teması
+Teslimat sistemi (GhostDeliveryPage) ayrı bir tam sayfa olarak açılıyor. Ana harita sayfası (HomePage) Yolcu/Şöfür toggle'ına sahip, alt panel içeriği role göre değişiyor. Teslimat sekmesi chip olarak mevcut fakat ayrı sayfaya yönlendiriyor.
 
 ## Requested Changes (Diff)
 
 ### Add
-1. **Son adresler listesi** — localStorage'da son 5 adres saklanır, arama ekranında "Son Adresler" başlığıyla listelenir. Seçince direkt CONFIRM fazına geçer.
-2. **Tahmini süre & fiyat önizlemesi** — CONFIRM panelinde mevcut (OSRM'den), ama arama sonucu seçilince de küçük bir "Tahmini ~X dk / ₺Y" badge gösterilsin.
-3. **Sürücü yakınlık göstergesi** — HomePage'de Şoför modunda "3 sürücü yakında" animasyonlu badge; Yolcu modunda "Yolcu aranıyor" spinner eşleşme bekleme simülasyonu.
-4. **Yolculuk özeti ekranı** — RIDING fazı tamamlandığında (rideCompleted) tam ekran özet kart gösterilir: süre, mesafe, fiyat, karma puanı +2, anonymous sürücü bilgisi, "Yeni Yolculuk" butonu.
-5. **Karanlık/Açık mod toggle** — TopBar'da sağ üst köşeye 🌙/☀️ butonu. `dark` class ana div'e eklenir. Tüm sayfalar dark mod renk tokenlarını alır.
-6. **Harita tam ekran butonu** — RIDING fazında alt panel üzerinde ▲/▼ butonu, alt paneli küçültür/genişletir.
+- Top bar role toggle'a üçüncü seçenek: **Teslimat** (Yolcu | Şöfür | Teslimat)
+- Role === "delivery" olduğunda alt panel içinde 6 adımlı teslimat akışı (GhostDeliveryPage mantığı, inline)
+- Harita arka planda görünür kalmaya devam eder
+- Teslimat takip adımında harita inline map container ile alt panelde gösterilir
 
 ### Modify
-- LiveRideMapPage: rideCompleted → yolculuk özeti ekranı göster (mevcut tamamlandı banner'ı yerine)
-- LiveRideMapPage: SEARCH ekranına son adresler bölümü ekle
-- HomePage: sürücü yakınlık badge'i ve yolcu eşleşme spinner ekle
-- Tema sistemi: `useDarkMode` hook + localStorage persist
+- HomePage top bar: 2'li toggle → 3'lü toggle (Yolcu | Şöfür | Teslimat)
+- CHIPS listesinden "Teslimat" chip'i kaldırılır (artık top toggle'da)
+- GhostDeliveryPage'deki tüm adımlar (create, pricing, matching, tracking, code, summary) HomePage'in alt paneline taşınır
+- Alt panel yüksekliği teslimat modunda scroll destekli olur
+- onGhostDelivery prop ve ayrı sayfa yönlendirmesi kaldırılır
 
 ### Remove
-- Küçük "Yolculuk tamamlandı" banner'ı (yerine tam ekran özet kart geliyor)
+- Teslimat için ayrı sayfa navigasyonu
+- CHIPS içindeki Teslimat butonu
 
 ## Implementation Plan
-1. `useDarkMode` hook yaz (localStorage persist, body class toggle)
-2. HomePage'e dark mod toggle, sürücü yakınlık animasyonu, yolcu eşleşme spinner ekle
-3. LiveRideMapPage'e son adresler (localStorage), tam ekran toggle, yolculuk özeti ekranı ekle
-4. Tüm dosyalara dark mod class desteği
+1. HomePage.tsx'e delivery state ve tüm GhostDeliveryPage state'lerini ekle
+2. Top bar toggle'ı 3 seçenekli yap (Yolcu / Şöfür / Teslimat)
+3. role === 'delivery' panelini inline delivery flow olarak implemente et (AddressInput, tüm adımlar)
+4. Tracking adımında alt panelde harita göster (leaflet, küçük inline map)
+5. GhostDeliveryPage'deki helper componentleri (MatchingStep, SummaryStep, AddressInput) HomePage içine taşı veya import et
+6. CHIPS'ten Teslimat'ı çıkar, App.tsx'te onGhostDelivery'nin artık gerekmediğini işaretle (prop opsiyonel kalabilir)
+7. Validate

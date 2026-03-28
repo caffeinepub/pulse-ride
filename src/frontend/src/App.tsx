@@ -5,6 +5,7 @@ import { useDarkMode } from "@/hooks/useDarkMode";
 import DriverDashboard from "@/pages/DriverDashboard";
 import GhostAlarmSetupPage from "@/pages/GhostAlarmSetupPage";
 import GhostChatPage from "@/pages/GhostChatPage";
+import GhostDeliveryPage from "@/pages/GhostDeliveryPage";
 import GhostDuelloPage from "@/pages/GhostDuelloPage";
 import GhostGroupPage from "@/pages/GhostGroupPage";
 import HomePage from "@/pages/HomePage";
@@ -30,14 +31,15 @@ export type AppView =
   | "ghost-group"
   | "ghost-duello"
   | "memory-bomb"
-  | "ghost-alarm-setup";
+  | "ghost-alarm-setup"
+  | "ghost-delivery";
 
 export interface SessionState {
   sessionId: string;
   role: "rider" | "driver";
 }
 
-type BottomTab = "home" | "rider" | "driver" | "ghost" | "more";
+type BottomTab = "home" | "rider" | "driver" | "ghost" | "delivery" | "more";
 
 const BOTTOM_BAR_VIEWS: AppView[] = ["landing", "rider", "driver", "map"];
 
@@ -47,6 +49,7 @@ function getActiveTab(view: AppView, _session: SessionState | null): BottomTab {
     return "rider";
   if (view === "driver" || view === "session-start-driver") return "driver";
   if (view === "ghost-chat" || view === "ghost-group") return "ghost";
+  if (view === "ghost-delivery") return "delivery";
   if (
     view === "ghost-alarm-setup" ||
     view === "viral-mode" ||
@@ -105,6 +108,8 @@ export default function App() {
       }
     } else if (tab === "ghost") {
       setView("ghost-chat");
+    } else if (tab === "delivery") {
+      setView("ghost-delivery");
     } else if (tab === "more") {
       setView("ghost-alarm-setup");
     }
@@ -122,6 +127,7 @@ export default function App() {
           onGhostChat={() => setView("ghost-chat")}
           onGhostGroup={() => setView("ghost-group")}
           onGhostAlarm={() => setView("ghost-alarm-setup")}
+          onGhostDelivery={() => setView("ghost-delivery")}
         />
       )}
       {(view === "session-start-rider" || view === "session-start-driver") && (
@@ -186,6 +192,9 @@ export default function App() {
       )}
       {view === "ghost-alarm-setup" && (
         <GhostAlarmSetupPage onBack={() => setView("landing")} />
+      )}
+      {view === "ghost-delivery" && (
+        <GhostDeliveryPage onBack={() => setView("landing")} />
       )}
       {showBottomBar && (
         <BottomTabBar activeTab={activeTab} onTabChange={handleTabChange} />

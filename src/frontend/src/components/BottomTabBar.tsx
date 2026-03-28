@@ -1,6 +1,6 @@
-import { Car, Ghost, Home, Menu, Truck } from "lucide-react";
+import { Car, Ghost, Home, Menu, Package, Truck } from "lucide-react";
 
-type Tab = "home" | "rider" | "driver" | "ghost" | "more";
+type Tab = "home" | "rider" | "driver" | "ghost" | "delivery" | "more";
 
 interface BottomTabBarProps {
   activeTab: Tab;
@@ -12,6 +12,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "rider", label: "Yolcu", icon: <Car className="w-5 h-5" /> },
   { id: "driver", label: "Şoför", icon: <Truck className="w-5 h-5" /> },
   { id: "ghost", label: "Ghost", icon: <Ghost className="w-5 h-5" /> },
+  { id: "delivery", label: "Teslimat", icon: <Package className="w-5 h-5" /> },
   { id: "more", label: "Daha Fazla", icon: <Menu className="w-5 h-5" /> },
 ];
 

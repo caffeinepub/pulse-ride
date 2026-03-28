@@ -318,8 +318,11 @@ export default function LiveRideMapPage({
             }).addTo(map);
             map.fitBounds(L.latLngBounds(coords), {
               padding: [80, 200],
-              maxZoom: 16,
+              maxZoom: 14,
             });
+            if (route.distance > 500000) {
+              map.setView([(p.lat + d.lat) / 2, (p.lng + d.lng) / 2], 6);
+            }
             setOsrmDistance(route.distance);
             setOsrmDuration(route.duration);
             setEtaCountdown(Math.round(route.duration));
@@ -888,6 +891,7 @@ export default function LiveRideMapPage({
           ref={mapContainerRef}
           className="absolute inset-0"
           style={{
+            zIndex: 1,
             filter: panicMode ? "blur(20px) brightness(0.3)" : "none",
             transition: "filter 0.35s ease",
           }}
@@ -898,7 +902,7 @@ export default function LiveRideMapPage({
       <AnimatePresence>
         {routeLoading && phase !== "SEARCH" && (
           <motion.div
-            className="absolute inset-0 z-[30] flex flex-col items-center justify-center"
+            className="absolute inset-0 z-[20] flex flex-col items-center justify-center"
             style={{ background: "rgba(255,255,255,0.92)" }}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -931,7 +935,7 @@ export default function LiveRideMapPage({
         !routeLoading &&
         osrmDuration !== null && (
           <div
-            className="absolute z-[25] left-4 pointer-events-none"
+            className="absolute z-[45] left-4 pointer-events-none"
             style={{
               bottom: phase === "CONFIRM" ? 380 : 220,
               transition: "bottom 0.4s ease",
@@ -960,7 +964,7 @@ export default function LiveRideMapPage({
 
       {/* ── TOP NAV (CONFIRM / RIDING) ─────────────────────────────── */}
       {(phase === "CONFIRM" || phase === "RIDING") && (
-        <div className="absolute top-0 left-0 right-0 z-[25] flex items-center justify-between px-4 pt-4 pb-2 pointer-events-none">
+        <div className="absolute top-0 left-0 right-0 z-[50] flex items-center justify-between px-4 pt-4 pb-2 pointer-events-none">
           <button
             type="button"
             onClick={handleBack}
@@ -1175,7 +1179,7 @@ export default function LiveRideMapPage({
       <AnimatePresence>
         {phase === "CONFIRM" && (
           <motion.div
-            className="absolute bottom-0 left-0 right-0 z-[30] rounded-t-3xl shadow-2xl overflow-hidden"
+            className="absolute bottom-0 left-0 right-0 z-[50] rounded-t-3xl shadow-2xl overflow-hidden"
             style={{ background: "#FFFFFF" }}
             initial={{ y: "100%" }}
             animate={{ y: 0 }}
@@ -1303,7 +1307,7 @@ export default function LiveRideMapPage({
       <AnimatePresence>
         {phase === "RIDING" && (
           <motion.div
-            className="absolute bottom-0 left-0 right-0 z-[30] rounded-t-3xl shadow-2xl overflow-hidden"
+            className="absolute bottom-0 left-0 right-0 z-[50] rounded-t-3xl shadow-2xl overflow-hidden"
             style={{ background: "#FFFFFF" }}
             initial={{ y: "100%" }}
             animate={{ y: 0 }}
