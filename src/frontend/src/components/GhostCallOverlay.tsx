@@ -10,6 +10,7 @@ export interface GhostCallOverlayProps {
   actor?: backendInterface | null;
   channelCode?: string;
   myId?: string;
+  sessionId?: string;
   isInitiator?: boolean;
 }
 
@@ -139,6 +140,7 @@ export default function GhostCallOverlay({
   actor,
   channelCode,
   myId,
+  sessionId,
   isInitiator = false,
 }: GhostCallOverlayProps) {
   const [voiceStyle, setVoiceStyle] = useState<VoiceStyle>("SYNTHETIC");
@@ -211,10 +213,11 @@ export default function GhostCallOverlay({
     if (!actor || !channelCode || !myId) return;
     const msg = `__CALL__:${type}:${JSON.stringify(payload)}`;
     try {
+      const backendSessionId = sessionId || myId || "";
       if (isGroup) {
-        await actor.sendGroupMessage(channelCode, myId, msg);
+        await actor.sendGroupMessage(channelCode, backendSessionId, msg);
       } else {
-        await actor.sendGhostMessage(channelCode, myId, msg);
+        await actor.sendGhostMessage(channelCode, backendSessionId, msg);
       }
     } catch (_e) {
       /* ignore */
@@ -273,16 +276,17 @@ export default function GhostCallOverlay({
     sigPollRef.current = setInterval(async () => {
       try {
         let msgs: Array<[string, string, bigint]>;
+        const backendSid = sessionId || myId || "";
         if (isGroup) {
           msgs = await actor.getGroupMessages(
             channelCode,
-            myId,
+            backendSid,
             sigIndexRef.current,
           );
         } else {
           msgs = await actor.getGhostMessages(
             channelCode,
-            myId,
+            backendSid,
             sigIndexRef.current,
           );
         }
@@ -463,12 +467,7 @@ export default function GhostCallOverlay({
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
     if (audioCtxRef.current) playConnectTone(audioCtxRef.current);
-    // Send offer from non-initiator side too for bidirectional
-    if (pcRef.current && processedStreamRef.current) {
-      const offer = await pcRef.current.createOffer();
-      await pcRef.current.setLocalDescription(offer);
-      await sendSignal("OFFER", offer);
-    }
+    // Non-initiator: wait for initiator's OFFER via signaling poll (do NOT send OFFER here)
   };
 
   // Reject incoming call

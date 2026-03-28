@@ -1436,7 +1436,9 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
           actor={actor}
           channelCode={roomCode}
           myId={myId}
+          sessionId={sessionIdRef.current}
           isInitiator={isCallInitiator}
+          isGroup={true}
         />
       )}
     </div>
