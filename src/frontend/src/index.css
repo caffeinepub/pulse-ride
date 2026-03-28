@@ -235,3 +235,31 @@
 .animate-waveform {
   animation: waveform 0.8s ease-in-out infinite;
 }
+
+/* Uber/Yandex style utilities */
+.uber-card {
+  background: white;
+  border-radius: 1rem;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.08);
+  border: 1px solid #e5e7eb;
+}
+.uber-btn-primary {
+  background: #276ef1;
+  color: white;
+  border-radius: 0.75rem;
+  font-weight: 600;
+}
+.uber-btn-primary:hover {
+  background: #1a5ed4;
+}
+.uber-header {
+  background: #141414;
+  color: white;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

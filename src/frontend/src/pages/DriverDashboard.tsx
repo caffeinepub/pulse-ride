@@ -8,7 +8,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { useActor } from "@/hooks/useActor";
 import { Ghost, Lock, LogOut, Navigation, Star, Zap } from "lucide-react";
@@ -34,44 +33,43 @@ interface AvailableRide {
 }
 
 const NAV_STEPS = [
-  "Head north on encrypted route A7 for 0.4mi",
-  "Turn right at checkpoint B3",
-  "Continue on secure corridor Gamma-2 for 0.8mi",
-  "Merge onto encrypted bypass route X9",
-  "Arrive at anonymized pickup zone — 250ft ahead",
+  "A7 şifreli güzergah üzerinde 0.4km kuzeye gidin",
+  "B3 kontrol noktasında sağa dönün",
+  "Gamma-2 güvenli koridorunda 0.8km ilerleyin",
+  "X9 şifreli bypass güzergahına katılın",
+  "Anonim alış noktasına varış — 250m ileride",
 ];
 
 const PULSE_EVENTS = [
   {
     type: "trivia" as const,
-    question:
-      "Which encryption standard is used in modern secure communications?",
+    question: "Modern güvenli iletişimde hangi şifreleme standardı kullanılır?",
     options: ["AES-256", "MD5", "SHA-1", "Base64"],
     answer: 0,
   },
   {
     type: "trivia" as const,
-    question: "What does 'zero-knowledge proof' mean?",
+    question: "'Sıfır bilgi kanıtı' ne anlama gelir?",
     options: [
-      "No proof needed",
-      "Proving knowledge without revealing it",
-      "Encrypted storage",
-      "Anonymous voting",
+      "Kanıt gerekmez",
+      "Bilgiyi ifşa etmeden kanıtlamak",
+      "Şifreli depolama",
+      "Anonim oylama",
     ],
     answer: 1,
   },
   {
     type: "ambient" as const,
-    message: "🛡️ You're traveling through encrypted corridor Alpha-7",
+    message: "🛡️ Alpha-7 şifreli koridordan geçiyorsunuz",
   },
   {
     type: "fact" as const,
     message:
-      "💡 Privacy fact: 93% of data breaches involve identity-linked records. You're protected.",
+      "💡 Gizlilik gerçeği: Veri ihlallerinin %93'ü kimlikle bağlantılı kayıtları içeriyor. Siz koruma altındasınız.",
   },
   {
     type: "ambient" as const,
-    message: "🌐 AI route optimization active — 3 phantom decoys deployed",
+    message: "🌐 AI rota optimizasyonu aktif — 3 phantom tuzağı yayınlanıyor",
   },
 ];
 
@@ -90,10 +88,10 @@ function formatTime(seconds: number): string {
 
 function trafficColor(level: string): string {
   return level === "Low"
-    ? "#22c55e"
+    ? "#05944F"
     : level === "Moderate"
       ? "#f59e0b"
-      : "#ef4444";
+      : "#E11900";
 }
 
 export default function DriverDashboard({
@@ -108,7 +106,6 @@ export default function DriverDashboard({
   const [showGhostChat, setShowGhostChat] = useState(false);
   const [navStep, setNavStep] = useState(0);
   const [routeProgress, setRouteProgress] = useState(0);
-
   const [pulseEvent, setPulseEvent] = useState<
     (typeof PULSE_EVENTS)[number] | null
   >(null);
@@ -201,9 +198,8 @@ export default function DriverDashboard({
           return 100;
         }
         const next = p + 1;
-        if (next > 0 && next % 20 === 0) {
+        if (next > 0 && next % 20 === 0)
           setNavStep((s) => Math.min(s + 1, NAV_STEPS.length - 1));
-        }
         return next;
       });
     }, 1000);
@@ -217,9 +213,9 @@ export default function DriverDashboard({
         await actor.acceptRide(ride.rideId, session.sessionId);
         setActiveRide(ride);
         if (pollRef.current) clearInterval(pollRef.current);
-        toast.success("Ride accepted — AI navigation activated");
+        toast.success("Yolculuk kabul edildi — AI navigasyonu aktif");
       } catch {
-        toast.error("Failed to accept ride");
+        toast.error("Yolculuk kabul edilemedi");
       }
     },
     [actor, session.sessionId],
@@ -235,7 +231,7 @@ export default function DriverDashboard({
       );
       setShowRating(true);
     } catch {
-      toast.error("Failed to complete ride");
+      toast.error("Yolculuk tamamlanamadı");
     }
   }, [actor, activeRide, session.sessionId]);
 
@@ -247,13 +243,13 @@ export default function DriverDashboard({
         session.sessionId,
         BigInt(ratingStars),
       );
-      toast.success("Rating submitted");
+      toast.success("Değerlendirme gönderildi");
       setShowRating(false);
       setActiveRide(null);
       setRouteProgress(0);
       setNavStep(0);
     } catch {
-      toast.error("Failed to submit rating");
+      toast.error("Değerlendirme gönderilemedi");
     }
   }, [actor, activeRide, ratingStars, session.sessionId]);
 
@@ -266,23 +262,20 @@ export default function DriverDashboard({
     setTimeout(onEndSession, 2500);
   }, [actor, session.sessionId, onEndSession]);
 
-  const accent = "#2ee6d6";
-
   if (sessionTerminated) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-white">
         <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="glass-card rounded-2xl p-10 text-center max-w-sm"
-          style={{ borderColor: "rgba(46,230,214,0.3)" }}
+          className="uber-card rounded-2xl p-10 text-center max-w-sm"
         >
           <div className="text-4xl mb-4">🔐</div>
-          <h2 className="text-lg font-bold uppercase tracking-widest text-white mb-2">
-            Session Terminated
+          <h2 className="text-lg font-bold text-[#141414] mb-2">
+            Oturum Sonlandırıldı
           </h2>
-          <p className="text-sm text-[#a7b0c2]">
-            All temporary data wiped. You are anonymous.
+          <p className="text-sm text-gray-500">
+            Tüm geçici veriler silindi. Anonimsiniz.
           </p>
         </motion.div>
       </div>
@@ -290,98 +283,90 @@ export default function DriverDashboard({
   }
 
   return (
-    <div className="min-h-screen px-4 md:px-8 py-8">
-      <div className="max-w-4xl mx-auto space-y-6">
-        {/* Header */}
+    <div className="min-h-screen bg-gray-50 pb-24">
+      {/* Header */}
+      <div className="uber-header px-5 py-4" data-ocid="driver.header.panel">
         <div className="flex items-center justify-between">
           <div>
-            <h1
-              className="text-xl font-black uppercase tracking-widest"
-              style={{ color: accent }}
-            >
-              DRIVER DASHBOARD
+            <h1 className="text-lg font-black text-white tracking-wide">
+              ŞOFÖR PANELİ
             </h1>
-            <p className="text-xs text-[#a7b0c2] mt-0.5">
-              Session: {maskSession(session.sessionId)}
+            <p className="text-xs text-gray-400 mt-0.5">
+              Oturum: {maskSession(session.sessionId)}
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <div className="text-xs text-[#a7b0c2] font-mono">
+            <div className="text-xs text-gray-400 font-mono">
               {formatTime(timer)}
             </div>
             <div
               className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full"
-              style={{
-                background: "rgba(46,230,214,0.1)",
-                border: "1px solid rgba(46,230,214,0.25)",
-                color: "#2ee6d6",
-              }}
+              style={{ background: "rgba(5,148,79,0.15)", color: "#05944F" }}
             >
-              <Lock className="w-3 h-3" /> All data encrypted
+              <Lock className="w-3 h-3" /> Şifreli
             </div>
             <Button
               variant="ghost"
               size="sm"
               onClick={handleEndSession}
-              className="text-xs text-[#a7b0c2] hover:text-red-400"
+              className="text-xs text-gray-300 hover:text-red-400"
               data-ocid="driver.end_session.button"
             >
-              <LogOut className="w-4 h-4 mr-1" /> End Session
+              <LogOut className="w-4 h-4 mr-1" /> Çıkış
             </Button>
           </div>
         </div>
+      </div>
 
+      <div className="px-4 pt-4 max-w-2xl mx-auto space-y-4">
         {/* Reputation */}
         <div
-          className="glass-card rounded-xl p-4"
-          style={{ borderColor: "rgba(46,230,214,0.2)" }}
+          className="uber-card rounded-xl p-4"
           data-ocid="driver.reputation.card"
         >
-          <p className="text-xs uppercase tracking-widest text-[#a7b0c2] mb-2">
-            REPUTATION
+          <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">
+            ÜNVAN
           </p>
           {reputation ? (
-            <div className="flex items-center gap-2">
-              <Zap className="w-5 h-5" style={{ color: "#2ee6d6" }} />
-              <span className="font-bold text-white">{reputation[0]}</span>
-              <span className="text-xs text-[#a7b0c2]">
-                • {reputation[1]} Successful Rides
-              </span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Zap className="w-5 h-5" style={{ color: "#276EF1" }} />
+                <span className="font-bold text-[#141414]">
+                  {reputation[0]}
+                </span>
+                <span className="text-xs text-gray-400">
+                  • {reputation[1]} yolculuk
+                </span>
+              </div>
             </div>
           ) : (
-            <div className="text-sm text-[#a7b0c2]">Loading...</div>
+            <div className="text-sm text-gray-400">Yükleniyor...</div>
           )}
         </div>
 
         {/* Available Rides or In-Ride */}
         {!activeRide ? (
-          <div
-            className="glass-card rounded-xl overflow-hidden"
-            style={{ borderColor: "rgba(46,230,214,0.2)" }}
-          >
-            <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between">
-              <h2 className="text-sm font-bold uppercase tracking-widest text-white">
-                AVAILABLE RIDES
+          <div className="uber-card rounded-xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h2 className="text-sm font-bold text-[#141414] uppercase tracking-wide">
+                MEVCUT YOLCULUKLAR
               </h2>
               <div
                 className="flex items-center gap-1.5 text-xs"
-                style={{ color: "#2ee6d6" }}
+                style={{ color: "#276EF1" }}
               >
-                <div
-                  className="w-1.5 h-1.5 rounded-full animate-pulse"
-                  style={{ background: "#2ee6d6" }}
-                />
-                Live
+                <div className="w-1.5 h-1.5 rounded-full animate-pulse bg-[#276EF1]" />
+                Canlı
               </div>
             </div>
             <div className="p-4 space-y-3">
               {rides.length === 0 ? (
                 <div
-                  className="text-center py-10 text-[#a7b0c2] text-sm"
+                  className="text-center py-10 text-gray-400 text-sm"
                   data-ocid="driver.rides.empty_state"
                 >
                   <Navigation className="w-8 h-8 mx-auto mb-3 opacity-30" />
-                  Scanning for ride requests...
+                  Yolculuk talepleri taranıyor...
                 </div>
               ) : (
                 rides.map((ride, index) => (
@@ -392,16 +377,9 @@ export default function DriverDashboard({
                     className="p-4 rounded-xl"
                     style={{
                       background: ride.isPhantom
-                        ? "rgba(168,85,255,0.08)"
-                        : "rgba(46,230,214,0.05)",
-                      border: `1px solid ${
-                        ride.isPhantom
-                          ? "rgba(168,85,255,0.3)"
-                          : "rgba(46,230,214,0.2)"
-                      }`,
-                      boxShadow: ride.isPhantom
-                        ? "0 0 16px rgba(168,85,255,0.12)"
-                        : "none",
+                        ? "rgba(124,58,237,0.05)"
+                        : "#FAFAFA",
+                      border: `1px solid ${ride.isPhantom ? "rgba(124,58,237,0.25)" : "#E5E7EB"}`,
                     }}
                     data-ocid={`driver.ride.item.${index + 1}`}
                   >
@@ -409,22 +387,22 @@ export default function DriverDashboard({
                       <div className="flex items-center gap-3">
                         {ride.isPhantom && (
                           <Ghost
-                            className="w-5 h-5 animate-phantom"
-                            style={{ color: "#a855ff" }}
+                            className="w-5 h-5"
+                            style={{ color: "#7C3AED" }}
                           />
                         )}
                         <div>
                           <div className="flex items-center gap-2 mb-1">
-                            <span className="text-xs font-mono font-bold text-white">
+                            <span className="text-xs font-mono font-bold text-[#141414]">
                               {ride.sessionCode}
                             </span>
                             {ride.isPhantom && (
                               <span
-                                className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider"
+                                className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase"
                                 style={{
-                                  background: "rgba(168,85,255,0.2)",
-                                  color: "#c084fc",
-                                  border: "1px solid rgba(168,85,255,0.3)",
+                                  background: "rgba(124,58,237,0.1)",
+                                  color: "#7C3AED",
+                                  border: "1px solid rgba(124,58,237,0.2)",
                                 }}
                               >
                                 PHANTOM
@@ -432,21 +410,21 @@ export default function DriverDashboard({
                             )}
                           </div>
                           <div className="flex items-center gap-3">
-                            <p className="text-[10px] text-[#a7b0c2]">
-                              Trust:{" "}
-                              <span style={{ color: accent }}>
-                                {ride.riderTrust || "Unknown"}
+                            <p className="text-[10px] text-gray-500">
+                              Güven:{" "}
+                              <span style={{ color: "#276EF1" }}>
+                                {ride.riderTrust || "Bilinmiyor"}
                               </span>
                             </p>
-                            <p className="text-[10px] text-[#a7b0c2]">
-                              {ride.distanceKm} km • {ride.durationMin} min
+                            <p className="text-[10px] text-gray-400">
+                              {ride.distanceKm} km · {ride.durationMin} dk
                             </p>
                             <span
-                              className="text-[10px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider"
+                              className="text-[10px] px-1.5 py-0.5 rounded-full font-bold uppercase"
                               style={{
-                                background: `${trafficColor(ride.trafficLevel)}15`,
+                                background: `${trafficColor(ride.trafficLevel)}12`,
                                 color: trafficColor(ride.trafficLevel),
-                                border: `1px solid ${trafficColor(ride.trafficLevel)}35`,
+                                border: `1px solid ${trafficColor(ride.trafficLevel)}25`,
                               }}
                             >
                               {ride.trafficLevel}
@@ -458,19 +436,20 @@ export default function DriverDashboard({
                         <div className="text-right">
                           <p
                             className="text-xl font-black"
-                            style={{ color: accent }}
+                            style={{ color: "#276EF1" }}
                           >
                             ₺{ride.aiPrice}
                           </p>
-                          <p className="text-[10px] text-[#a7b0c2]">cash</p>
+                          <p className="text-[10px] text-gray-400">nakit</p>
                         </div>
                         <Button
                           onClick={() => handleAcceptRide(ride)}
                           size="sm"
-                          className="btn-secondary text-xs font-bold tracking-wider uppercase rounded-full px-4"
+                          className="text-xs font-bold tracking-wide uppercase rounded-xl px-4 text-white"
+                          style={{ background: "#276EF1" }}
                           data-ocid={`driver.accept_ride.button.${index + 1}`}
                         >
-                          ACCEPT
+                          KABUL ET
                         </Button>
                       </div>
                     </div>
@@ -484,231 +463,240 @@ export default function DriverDashboard({
           <>
             <KarmicScore sessionId={session.sessionId} userRole="driver" />
 
-            <div className="space-y-4">
-              {/* Active ride price banner */}
-              <div
-                className="glass-card rounded-xl p-4 flex items-center justify-between"
-                style={{
-                  borderColor: "rgba(46,230,214,0.3)",
-                  background: "rgba(46,230,214,0.04)",
-                }}
-              >
-                <div>
-                  <p className="text-[10px] text-[#a7b0c2] uppercase tracking-widest">
-                    AGREED FARE
-                  </p>
-                  <p className="text-2xl font-black" style={{ color: accent }}>
-                    ₺{activeRide.aiPrice}
-                  </p>
+            {/* Active ride price banner */}
+            <div
+              className="uber-card rounded-xl p-4 flex items-center justify-between"
+              style={{
+                borderColor: "rgba(39,110,241,0.2)",
+                background: "rgba(39,110,241,0.03)",
+              }}
+            >
+              <div>
+                <p className="text-[10px] text-gray-500 uppercase tracking-wider">
+                  ANLAŞILAN ÜCRET
+                </p>
+                <p className="text-2xl font-black" style={{ color: "#276EF1" }}>
+                  ₺{activeRide.aiPrice}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] text-gray-500">
+                  {activeRide.distanceKm} km · {activeRide.durationMin} dk
+                </p>
+                <span
+                  className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase"
+                  style={{
+                    background: `${trafficColor(activeRide.trafficLevel)}12`,
+                    color: trafficColor(activeRide.trafficLevel),
+                    border: `1px solid ${trafficColor(activeRide.trafficLevel)}25`,
+                  }}
+                >
+                  {activeRide.trafficLevel} TRAFİK
+                </span>
+              </div>
+            </div>
+
+            {/* Navigation */}
+            <div
+              className="uber-card rounded-xl p-4"
+              style={{ borderColor: "rgba(39,110,241,0.2)" }}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Navigation
+                    className="w-5 h-5"
+                    style={{ color: "#276EF1" }}
+                  />
+                  <h2 className="text-sm font-bold text-[#141414] uppercase tracking-wide">
+                    AI NAVİGASYON AKTİF
+                  </h2>
                 </div>
-                <div className="text-right">
-                  <p className="text-[10px] text-[#a7b0c2]">
-                    {activeRide.distanceKm} km • {activeRide.durationMin} min
-                  </p>
-                  <span
-                    className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider"
-                    style={{
-                      background: `${trafficColor(activeRide.trafficLevel)}15`,
-                      color: trafficColor(activeRide.trafficLevel),
-                      border: `1px solid ${trafficColor(activeRide.trafficLevel)}35`,
-                    }}
+                {activeRide.isPhantom && (
+                  <div
+                    className="flex items-center gap-1.5 text-xs"
+                    style={{ color: "#7C3AED" }}
                   >
-                    {activeRide.trafficLevel} TRAFFIC
+                    <Ghost className="w-4 h-4" />
+                    PHANTOM
+                  </div>
+                )}
+              </div>
+
+              <div className="mb-2">
+                <Progress value={routeProgress} className="h-1.5" />
+                <div className="flex justify-between text-[10px] text-gray-400 mt-1">
+                  <span>%{routeProgress}</span>
+                  <span style={{ color: "#276EF1" }}>
+                    {routeProgress < 100 ? "Devam ediyor..." : "Varıldı"}
                   </span>
                 </div>
               </div>
 
-              <div
-                className="glass-card rounded-xl p-4 animate-border-glow"
-                style={{ borderColor: "rgba(46,230,214,0.3)" }}
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <Navigation className="w-5 h-5" style={{ color: accent }} />
-                    <h2 className="text-sm font-bold uppercase tracking-widest text-white">
-                      AI NAVIGATION ACTIVE
-                    </h2>
-                  </div>
-                  {activeRide.isPhantom && (
-                    <div
-                      className="flex items-center gap-1.5 text-xs animate-phantom"
-                      style={{ color: "#a855ff" }}
-                    >
-                      <Ghost className="w-4 h-4" />
-                      PHANTOM PASSENGER
-                    </div>
-                  )}
-                </div>
-                <Progress value={routeProgress} className="h-1.5 mb-3" />
-                <div className="space-y-2">
-                  {NAV_STEPS.map((step, i) => (
-                    <div
-                      key={step}
-                      className={`flex items-center gap-2 text-xs transition-all ${
-                        i === navStep
-                          ? "text-white"
-                          : i < navStep
-                            ? "text-[#a7b0c2] line-through opacity-50"
-                            : "text-[#a7b0c2] opacity-30"
-                      }`}
-                    >
-                      <div
-                        className="w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0"
-                        style={{
-                          background:
-                            i <= navStep ? `${accent}20` : "transparent",
-                          border: `1px solid ${
-                            i <= navStep ? accent : "rgba(255,255,255,0.1)"
-                          }`,
-                        }}
-                      >
-                        {i < navStep ? (
-                          <span style={{ color: accent, fontSize: "9px" }}>
-                            ✓
-                          </span>
-                        ) : i === navStep ? (
-                          <div
-                            className="w-1.5 h-1.5 rounded-full animate-pulse"
-                            style={{ background: accent }}
-                          />
-                        ) : null}
-                      </div>
-                      {step}
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-4">
-                  <Button
-                    onClick={handleCompleteRide}
-                    className="w-full btn-secondary rounded-full font-bold tracking-widest uppercase text-xs"
-                    data-ocid="driver.complete_ride.primary_button"
+              <div className="space-y-2 mt-3">
+                {NAV_STEPS.map((step, i) => (
+                  <div
+                    key={step}
+                    className={`flex items-center gap-2 text-xs transition-all ${
+                      i === navStep
+                        ? "text-[#141414] font-semibold"
+                        : i < navStep
+                          ? "text-gray-300 line-through"
+                          : "text-gray-400 opacity-50"
+                    }`}
                   >
-                    COMPLETE RIDE
-                  </Button>
-                  {onLiveMap && (
-                    <button
-                      onClick={onLiveMap}
-                      className="w-full mt-2 py-3 font-mono font-black text-xs tracking-widest uppercase rounded-xl transition-all active:scale-95"
+                    <div
+                      className="w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0"
                       style={{
-                        background: "rgba(0,255,255,0.1)",
-                        border: "1px solid rgba(0,255,255,0.4)",
-                        color: "#00ffff",
+                        background:
+                          i <= navStep ? "rgba(39,110,241,0.1)" : "transparent",
+                        border: `1px solid ${i <= navStep ? "#276EF1" : "#E5E7EB"}`,
                       }}
-                      type="button"
-                      data-ocid="driver.track_ride.button"
                     >
-                      🗺️ TRACK RIDE
-                    </button>
+                      {i < navStep ? (
+                        <span style={{ color: "#276EF1", fontSize: "9px" }}>
+                          ✓
+                        </span>
+                      ) : i === navStep ? (
+                        <div className="w-1.5 h-1.5 rounded-full animate-pulse bg-[#276EF1]" />
+                      ) : null}
+                    </div>
+                    {step}
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 space-y-2">
+                <Button
+                  onClick={handleCompleteRide}
+                  className="w-full rounded-xl font-bold tracking-wide uppercase text-xs text-white"
+                  style={{ background: "#05944F" }}
+                  data-ocid="driver.complete_ride.primary_button"
+                >
+                  YOLCULUĞU TAMAMLA
+                </Button>
+                {onLiveMap && (
+                  <button
+                    onClick={onLiveMap}
+                    className="w-full py-3 font-bold text-xs tracking-wide uppercase rounded-xl transition-all hover:opacity-90"
+                    style={{
+                      background: "rgba(39,110,241,0.08)",
+                      border: "1px solid rgba(39,110,241,0.25)",
+                      color: "#276EF1",
+                    }}
+                    type="button"
+                    data-ocid="driver.track_ride.button"
+                  >
+                    🗺️ ROTA TAKİP
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowGhostChat(true)}
+                  className="w-full py-3 font-bold text-xs tracking-wide uppercase rounded-xl transition-all hover:opacity-90"
+                  style={{
+                    background: "rgba(124,58,237,0.08)",
+                    border: "1px solid rgba(124,58,237,0.25)",
+                    color: "#7C3AED",
+                  }}
+                  data-ocid="driver.ghost_chat.button"
+                >
+                  💬 GHOST CHAT
+                </button>
+              </div>
+            </div>
+
+            {/* Pulse Event */}
+            <AnimatePresence>
+              {pulseEvent && (
+                <motion.div
+                  key={pulseEvent.type}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="uber-card rounded-xl p-5"
+                  style={{ borderColor: "rgba(124,58,237,0.2)" }}
+                >
+                  {pulseEvent.type === "trivia" ? (
+                    <div>
+                      <p
+                        className="text-xs font-bold uppercase tracking-wider mb-3"
+                        style={{ color: "#7C3AED" }}
+                      >
+                        ⚡ PULSE TRİVİA
+                      </p>
+                      <p className="text-sm text-[#141414] mb-3">
+                        {pulseEvent.question}
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {pulseEvent.options.map((opt, i) => (
+                          <button
+                            type="button"
+                            key={opt}
+                            onClick={() => setSelectedAnswer(i)}
+                            className="text-left text-xs px-3 py-2 rounded-xl transition-all"
+                            style={{
+                              background:
+                                selectedAnswer === i
+                                  ? i === pulseEvent.answer
+                                    ? "rgba(5,148,79,0.1)"
+                                    : "rgba(225,25,0,0.08)"
+                                  : "#F9FAFB",
+                              border: `1px solid ${
+                                selectedAnswer === i
+                                  ? i === pulseEvent.answer
+                                    ? "#05944F"
+                                    : "#E11900"
+                                  : "#E5E7EB"
+                              }`,
+                              color:
+                                selectedAnswer === i
+                                  ? i === pulseEvent.answer
+                                    ? "#05944F"
+                                    : "#E11900"
+                                  : "#6B7280",
+                            }}
+                          >
+                            {opt}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-600">
+                      {pulseEvent.message}
+                    </p>
                   )}
                   <button
                     type="button"
-                    onClick={() => setShowGhostChat(true)}
-                    className="w-full mt-2 py-3 font-mono font-black text-xs tracking-widest uppercase rounded-xl transition-all active:scale-95"
-                    style={{
-                      background: "rgba(168,85,255,0.1)",
-                      border: "1px solid rgba(168,85,255,0.4)",
-                      color: "#a855ff",
-                    }}
-                    data-ocid="driver.ghost_chat.button"
+                    onClick={() => setPulseEvent(null)}
+                    className="mt-3 text-[10px] text-gray-400 hover:text-gray-600"
                   >
-                    💬 GHOST CHAT
+                    Kapat
                   </button>
-                </div>
-              </div>
-
-              {/* Pulse Event */}
-              <AnimatePresence>
-                {pulseEvent && (
-                  <motion.div
-                    key={pulseEvent.type}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    className="glass-card rounded-xl p-5"
-                    style={{ borderColor: "rgba(168,85,255,0.3)" }}
-                  >
-                    {pulseEvent.type === "trivia" ? (
-                      <div>
-                        <p
-                          className="text-xs font-bold uppercase tracking-widest mb-3"
-                          style={{ color: "#a855ff" }}
-                        >
-                          ⚡ PULSE TRIVIA
-                        </p>
-                        <p className="text-sm text-white mb-3">
-                          {pulseEvent.question}
-                        </p>
-                        <div className="grid grid-cols-2 gap-2">
-                          {pulseEvent.options.map((opt, i) => (
-                            <button
-                              type="button"
-                              key={opt}
-                              onClick={() => setSelectedAnswer(i)}
-                              className="text-left text-xs px-3 py-2 rounded-lg transition-all"
-                              style={{
-                                background:
-                                  selectedAnswer === i
-                                    ? i === pulseEvent.answer
-                                      ? "rgba(46,230,214,0.2)"
-                                      : "rgba(255,80,80,0.15)"
-                                    : "rgba(255,255,255,0.05)",
-                                border: `1px solid ${
-                                  selectedAnswer === i
-                                    ? i === pulseEvent.answer
-                                      ? "#2ee6d6"
-                                      : "#ff5050"
-                                    : "rgba(255,255,255,0.1)"
-                                }`,
-                                color:
-                                  selectedAnswer === i
-                                    ? i === pulseEvent.answer
-                                      ? "#2ee6d6"
-                                      : "#ff8080"
-                                    : "#a7b0c2",
-                              }}
-                            >
-                              {opt}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="text-sm text-[#a7b0c2]">
-                        {pulseEvent.message}
-                      </p>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setPulseEvent(null)}
-                      className="mt-3 text-[10px] text-[#a7b0c2] hover:text-white"
-                    >
-                      Dismiss
-                    </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Ghost Chat Overlay trigger placeholder */}
-              {showGhostChat && activeRide && (
-                <InRideGhostChat
-                  rideId={activeRide.rideId}
-                  mySessionId={session.sessionId}
-                  userRole="driver"
-                  onClose={() => setShowGhostChat(false)}
-                />
+                </motion.div>
               )}
-            </div>
+            </AnimatePresence>
+
+            {showGhostChat && activeRide && (
+              <InRideGhostChat
+                rideId={activeRide.rideId}
+                mySessionId={session.sessionId}
+                userRole="driver"
+                onClose={() => setShowGhostChat(false)}
+              />
+            )}
           </>
         )}
       </div>
+
       <Dialog open={showRating} onOpenChange={setShowRating}>
         <DialogContent
-          className="glass-card border-cyan-500/30 text-white"
+          className="bg-white border-gray-200 text-[#141414]"
           data-ocid="driver.rating.dialog"
         >
           <DialogHeader>
             <DialogTitle className="uppercase tracking-widest text-sm">
-              RATE YOUR RIDER
+              YOLCUYU DEĞERLENDİR
             </DialogTitle>
           </DialogHeader>
           <div className="flex justify-center gap-2 py-4">
@@ -722,7 +710,7 @@ export default function DriverDashboard({
                 <Star
                   className="w-8 h-8 transition-all"
                   style={{
-                    color: s <= ratingStars ? "#f5c84b" : "#374151",
+                    color: s <= ratingStars ? "#f5c84b" : "#D1D5DB",
                     fill: s <= ratingStars ? "#f5c84b" : "transparent",
                   }}
                 />
@@ -731,14 +719,11 @@ export default function DriverDashboard({
           </div>
           <Button
             onClick={handleSubmitRating}
-            className="w-full rounded-full font-bold tracking-widest uppercase"
-            style={{
-              background: "linear-gradient(135deg, #2ee6d6, #3be7ff)",
-              color: "#060812",
-            }}
+            className="w-full rounded-xl font-bold tracking-wide uppercase text-white"
+            style={{ background: "#276EF1" }}
             data-ocid="driver.rating.submit_button"
           >
-            SUBMIT RATING
+            DEĞERLENDİRMEYİ GÖNDER
           </Button>
         </DialogContent>
       </Dialog>

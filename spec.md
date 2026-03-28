@@ -1,35 +1,28 @@
 # PulseRide
 
 ## Current State
-LiveRideMapPage mevcut haliyle CartoDB dark tiles kullanıyor ama harita etkileşimi devre dışı (drag, zoom kapalı), rota düz çizgi, araba animasyonu basit, gerçek routing yok.
+PulseRide is a feature-rich anonymous ride-sharing platform with a cyberpunk dark UI (neon purple/cyan on dark backgrounds). It has LandingPage, RiderDashboard, DriverDashboard, LiveRideMapPage, and multiple special feature pages. The app has no bottom navigation bar — all navigation is page-based.
 
 ## Requested Changes (Diff)
 
 ### Add
-- OSRM API ile gerçek yol rotası çekme (router.project-osrm.org)
-- Araba ikonu gerçek rota boyunca smooth animasyon
-- Harita tam etkileşimli (drag, zoom, her şey açık)
-- Uber benzeri profesyonel UI: üstte adres bar, altta bilgi paneli
-- Başlangıç (A) ve bitiş (B) noktası işaretleri profesyonel
-- Rota üzerinde adım adım waypoint listesi
-- ETA ve mesafe gerçek OSRM verisinden
-- Araç rotayı tamamladığında animasyon biter
-- Geocoding: adres yazınca Nominatim ile arama önerileri
+- Bottom navigation bar (tab bar) on main app screens (Landing, Rider, Driver dashboards) similar to Uber/Yandex style: clean, white/light background, icon + label tabs
+- App-wide professional color scheme update to match Uber/Yandex aesthetic: dark navy/black primary, bright blue (#276EF1 Uber blue) as accent, clean whites and grays
 
 ### Modify
-- Harita kontrolleri tamamen açılacak (drag/zoom/touch hepsi)
-- Tile layer CartoDB dark kalacak ama attribution gösterilecek
-- Rota düz çizgiden gerçek yol geometrisine çevrilecek
-- Araç animasyonu lerp yerine rota waypoint'leri üzerinde segment bazlı
+- LandingPage: Redesign to Uber/Yandex-like professional look with clean bottom bar showing tabs: Home, Ride, Drive, Messages (Ghost Chat), More
+- RiderDashboard: Professional clean layout with white cards, dark header, Uber blue accents, bottom tab bar
+- DriverDashboard: Same professional treatment
+- index.css: Update color tokens to professional Uber-like palette while preserving all animations
+- All feature pages: Keep all existing functionality but update colors to be consistent
 
 ### Remove
-- `dragging={false}`, `scrollWheelZoom={false}`, `doubleClickZoom={false}`, `touchZoom={false}` kısıtlamaları
+- Excessive neon glow effects on the main landing page (keep subtle ones)
+- Overly dark cyberpunk styling on rider/driver dashboards (keep ghost/phantom feature styling)
 
 ## Implementation Plan
-1. LiveRideMapPage tamamen yeniden yaz
-2. OSRM API'den rota geometrisi çek (geojson)
-3. Araç animasyonu rota segmentleri üzerinde ilerlesin
-4. Harita tüm etkileşimlere açık
-5. Uber benzeri bottom sheet: sürücü bilgisi, ETA, mesafe, faz
-6. Nominatim autocomplete adres arama (opsiyonel prop)
-7. Mevcut PulseRide cyberpunk HUD korunacak
+1. Add a shared BottomTabBar component with 5 tabs: Home, Rider, Driver, Chat, More
+2. Update index.css to add Uber-like CSS variables and professional color utilities
+3. Redesign LandingPage with professional Uber/Yandex-inspired layout + BottomTabBar
+4. Update RiderDashboard and DriverDashboard with professional card styles and bottom bar
+5. All other pages (GhostChat, GhostGroup, etc.) keep existing styling but get bottom safe area padding

@@ -1,3 +1,4 @@
+import BottomTabBar from "@/components/BottomTabBar";
 import PWAInstallBanner from "@/components/PWAInstallBanner";
 import { Toaster } from "@/components/ui/sonner";
 import DriverDashboard from "@/pages/DriverDashboard";
@@ -34,6 +35,24 @@ export interface SessionState {
   role: "rider" | "driver";
 }
 
+type BottomTab = "home" | "rider" | "driver" | "ghost" | "more";
+
+const BOTTOM_BAR_VIEWS: AppView[] = ["landing", "rider", "driver"];
+
+function getActiveTab(view: AppView, _session: SessionState | null): BottomTab {
+  if (view === "landing") return "home";
+  if (view === "rider" || view === "session-start-rider") return "rider";
+  if (view === "driver" || view === "session-start-driver") return "driver";
+  if (view === "ghost-chat" || view === "ghost-group") return "ghost";
+  if (
+    view === "ghost-alarm-setup" ||
+    view === "viral-mode" ||
+    view === "secure-comm"
+  )
+    return "more";
+  return "home";
+}
+
 export default function App() {
   const [view, setView] = useState<AppView>("landing");
   const [session, setSession] = useState<SessionState | null>(null);
@@ -52,8 +71,33 @@ export default function App() {
     setView("landing");
   };
 
+  const showBottomBar = BOTTOM_BAR_VIEWS.includes(view);
+  const activeTab = getActiveTab(view, session);
+
+  const handleTabChange = (tab: BottomTab) => {
+    if (tab === "home") {
+      setView("landing");
+    } else if (tab === "rider") {
+      if (session?.role === "rider") {
+        setView("rider");
+      } else {
+        setView("session-start-rider");
+      }
+    } else if (tab === "driver") {
+      if (session?.role === "driver") {
+        setView("driver");
+      } else {
+        setView("session-start-driver");
+      }
+    } else if (tab === "ghost") {
+      setView("ghost-chat");
+    } else if (tab === "more") {
+      setView("ghost-alarm-setup");
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#060812] to-[#0a0f1e]">
+    <div className="min-h-screen bg-white">
       <PWAInstallBanner />
       {view === "landing" && (
         <LandingPage
@@ -120,6 +164,9 @@ export default function App() {
       )}
       {view === "ghost-alarm-setup" && (
         <GhostAlarmSetupPage onBack={() => setView("landing")} />
+      )}
+      {showBottomBar && (
+        <BottomTabBar activeTab={activeTab} onTabChange={handleTabChange} />
       )}
       <Toaster />
     </div>
