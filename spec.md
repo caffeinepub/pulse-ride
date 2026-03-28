@@ -1,33 +1,32 @@
-# PulseRide
+# PulseRide v29 — Profesyonellik Paketi
 
 ## Current State
-LiveRideMapPage uses CartoDB dark tiles, Leaflet CDN loader, OSRM routing, and a showSearchScreen state. When user selects address from search, destSnap.current is updated and showSearchScreen=false triggers map init effect. Errors occur on transition. Car animation is emoji-based with setInterval.
+- Tek sayfa Uber-style layout (HomePage) — harita arka plan, sol üst Yolcu/Şoför toggle
+- LiveRideMapPage: SEARCH → CONFIRM → RIDING faz makinesi, Leaflet harita, OSRM rota, araç animasyonu
+- Tüm ghost özellikler (GHOST CHAT, GHOST COMM, GHOST GROUP, GHOST ALARM, GHOST DÜELLO vb.) mevcut
+- Alt navigasyon çubuğu, PWA desteği, Uber/Yandex teması
 
 ## Requested Changes (Diff)
 
 ### Add
-- Light Uber-style map tiles (CartoDB Voyager - white/light grey)
-- Smooth car animation using requestAnimationFrame with linear interpolation between route waypoints
-- Uber-style bottom sheet: confirm screen with price, ETA, car type, cash payment button
-- Black ETA badge floating on map (like Uber's "3 DK" badge)
-- Proper map key to force re-mount when coords change
+1. **Son adresler listesi** — localStorage'da son 5 adres saklanır, arama ekranında "Son Adresler" başlığıyla listelenir. Seçince direkt CONFIRM fazına geçer.
+2. **Tahmini süre & fiyat önizlemesi** — CONFIRM panelinde mevcut (OSRM'den), ama arama sonucu seçilince de küçük bir "Tahmini ~X dk / ₺Y" badge gösterilsin.
+3. **Sürücü yakınlık göstergesi** — HomePage'de Şoför modunda "3 sürücü yakında" animasyonlu badge; Yolcu modunda "Yolcu aranıyor" spinner eşleşme bekleme simülasyonu.
+4. **Yolculuk özeti ekranı** — RIDING fazı tamamlandığında (rideCompleted) tam ekran özet kart gösterilir: süre, mesafe, fiyat, karma puanı +2, anonymous sürücü bilgisi, "Yeni Yolculuk" butonu.
+5. **Karanlık/Açık mod toggle** — TopBar'da sağ üst köşeye 🌙/☀️ butonu. `dark` class ana div'e eklenir. Tüm sayfalar dark mod renk tokenlarını alır.
+6. **Harita tam ekran butonu** — RIDING fazında alt panel üzerinde ▲/▼ butonu, alt paneli küçültür/genişletir.
 
 ### Modify
-- Fix map initialization: pass coords as props/state instead of refs to avoid stale closure bugs
-- Fix transition from search screen to map (use key prop to force remount)
-- Car icon: white car SVG/emoji with shadow, rotates to face direction of travel
-- Route line: dark/black color like Uber (not blue)
-- Map tiles: light voyager theme
-- Remove dark overlay, use clean white bottom panel
+- LiveRideMapPage: rideCompleted → yolculuk özeti ekranı göster (mevcut tamamlandı banner'ı yerine)
+- LiveRideMapPage: SEARCH ekranına son adresler bölümü ekle
+- HomePage: sürücü yakınlık badge'i ve yolcu eşleşme spinner ekle
+- Tema sistemi: `useDarkMode` hook + localStorage persist
 
 ### Remove
-- CartoDB dark tiles
-- stale ref-based coord management causing errors
+- Küçük "Yolculuk tamamlandı" banner'ı (yerine tam ekran özet kart geliyor)
 
 ## Implementation Plan
-1. Rewrite LiveRideMapPage with a clean 3-phase UI: search → confirm → riding
-2. Fix address→map transition by using React state for coords (not just refs)
-3. Use voyager light tiles
-4. Smooth rAF-based car animation along OSRM route
-5. Uber-style confirm panel before ride starts
-6. Floating ETA badge on map
+1. `useDarkMode` hook yaz (localStorage persist, body class toggle)
+2. HomePage'e dark mod toggle, sürücü yakınlık animasyonu, yolcu eşleşme spinner ekle
+3. LiveRideMapPage'e son adresler (localStorage), tam ekran toggle, yolculuk özeti ekranı ekle
+4. Tüm dosyalara dark mod class desteği

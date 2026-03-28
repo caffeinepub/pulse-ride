@@ -37,6 +37,18 @@ function calcBearing(from: [number, number], to: [number, number]): number {
   return Math.atan2(dLng, dLat) * (180 / Math.PI);
 }
 
+function haversineDist(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 function makeCarIcon(L: any, bearing: number) {
   return L.divIcon({
     html: `<div style="font-size:26px;transform:rotate(${bearing}deg);display:flex;align-items:center;justify-content:center;filter:drop-shadow(0 3px 8px rgba(0,0,0,0.45));">🚗</div>`,
@@ -124,6 +136,15 @@ export default function LiveRideMapPage({
   const [searchQuery, setSearchQuery] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [recentAddresses, setRecentAddresses] = useState<any[]>(() => {
+    try {
+      return JSON.parse(
+        localStorage.getItem("pulseride_recent_addresses") || "[]",
+      );
+    } catch {
+      return [];
+    }
+  });
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleSearchInput = useCallback((val: string) => {
@@ -157,6 +178,22 @@ export default function LiveRideMapPage({
     setDestLabel(result.display_name.split(",").slice(0, 2).join(", "));
     setSearchResults([]);
     setSearchQuery("");
+    // Save to recent addresses
+    const recent = (() => {
+      try {
+        return JSON.parse(
+          localStorage.getItem("pulseride_recent_addresses") || "[]",
+        );
+      } catch {
+        return [];
+      }
+    })();
+    const updated = [
+      result,
+      ...recent.filter((r: any) => r.place_id !== result.place_id),
+    ].slice(0, 5);
+    localStorage.setItem("pulseride_recent_addresses", JSON.stringify(updated));
+    setRecentAddresses(updated);
     setPhase("CONFIRM");
   }, []);
 
@@ -176,6 +213,7 @@ export default function LiveRideMapPage({
   const [panicFlash, setPanicFlash] = useState(false);
   const [showWipe, setShowWipe] = useState(false);
   const [rideCompleted, setRideCompleted] = useState(false);
+  const [panelMinimized, setPanelMinimized] = useState(false);
 
   // Estimated price
   const price =
@@ -706,40 +744,123 @@ export default function LiveRideMapPage({
                             .trim()}
                         </p>
                       </div>
-                      <svg
-                        role="img"
-                        aria-label="icon"
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="#D1D5DB"
-                        strokeWidth="2.5"
-                      >
-                        <path d="M9 18l6-6-6-6" />
-                      </svg>
+                      <div className="flex flex-col items-end gap-1">
+                        <span
+                          className="text-xs font-medium px-2 py-0.5 rounded-full"
+                          style={{ background: "#F3F4F6", color: "#374151" }}
+                        >
+                          ~
+                          {Math.round(
+                            haversineDist(
+                              activePickup.lat,
+                              activePickup.lng,
+                              Number.parseFloat(result.lat),
+                              Number.parseFloat(result.lon),
+                            ) /
+                              1000 /
+                              0.5,
+                          )}{" "}
+                          dk
+                        </span>
+                        <svg
+                          role="img"
+                          aria-label="icon"
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="#D1D5DB"
+                          strokeWidth="2.5"
+                        >
+                          <path d="M9 18l6-6-6-6" />
+                        </svg>
+                      </div>
                     </button>
                   ))}
                 </>
               ) : searchQuery.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-60 gap-4">
-                  <div
-                    className="w-20 h-20 rounded-full flex items-center justify-center text-4xl"
-                    style={{ background: "#F3F4F6" }}
-                  >
-                    🗺️
-                  </div>
-                  <div className="text-center px-8">
-                    <p
-                      className="font-bold text-lg"
-                      style={{ color: "#141414" }}
-                    >
-                      Nereye?
-                    </p>
-                    <p className="text-sm mt-1" style={{ color: "#9CA3AF" }}>
-                      Türkiye ve Avrupa'da adres arayın
-                    </p>
-                  </div>
+                <div>
+                  {recentAddresses.length > 0 && (
+                    <>
+                      <p
+                        className="px-5 pt-4 pb-2 text-xs font-semibold uppercase tracking-widest"
+                        style={{ color: "#9CA3AF" }}
+                      >
+                        Son Adresler
+                      </p>
+                      {recentAddresses.map((result: any) => (
+                        <button
+                          type="button"
+                          key={result.place_id}
+                          onClick={() => handleSelectDest(result)}
+                          className="w-full flex items-center gap-3 px-5 py-3.5 text-left transition-colors hover:bg-gray-50 active:bg-gray-100"
+                          style={{ borderBottom: "1px solid #F9FAFB" }}
+                          data-ocid="live_map.recent.button"
+                        >
+                          <div
+                            className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 text-base"
+                            style={{ background: "#F3F4F6" }}
+                          >
+                            🕐
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p
+                              className="text-sm font-semibold truncate"
+                              style={{ color: "#141414" }}
+                            >
+                              {result.display_name.split(",")[0]}
+                            </p>
+                            <p
+                              className="text-xs truncate mt-0.5"
+                              style={{ color: "#9CA3AF" }}
+                            >
+                              {result.display_name
+                                .split(",")
+                                .slice(1, 3)
+                                .join(",")
+                                .trim()}
+                            </p>
+                          </div>
+                          <svg
+                            role="img"
+                            aria-label="icon"
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="#D1D5DB"
+                            strokeWidth="2.5"
+                          >
+                            <path d="M9 18l6-6-6-6" />
+                          </svg>
+                        </button>
+                      ))}
+                    </>
+                  )}
+                  {recentAddresses.length === 0 && (
+                    <div className="flex flex-col items-center justify-center h-60 gap-4">
+                      <div
+                        className="w-20 h-20 rounded-full flex items-center justify-center text-4xl"
+                        style={{ background: "#F3F4F6" }}
+                      >
+                        🗺️
+                      </div>
+                      <div className="text-center px-8">
+                        <p
+                          className="font-bold text-lg"
+                          style={{ color: "#141414" }}
+                        >
+                          Nereye?
+                        </p>
+                        <p
+                          className="text-sm mt-1"
+                          style={{ color: "#9CA3AF" }}
+                        >
+                          Türkiye ve Avrupa'da adres arayın
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : searchQuery.length < 2 ? (
                 <p className="px-5 pt-6 text-sm" style={{ color: "#9CA3AF" }}>
@@ -875,6 +996,123 @@ export default function LiveRideMapPage({
           <div style={{ width: 44 }} />
         </div>
       )}
+
+      {/* ── RIDE COMPLETED FULL SCREEN OVERLAY ───────────────────── */}
+      <AnimatePresence>
+        {rideCompleted && (
+          <motion.div
+            className="absolute inset-0 z-[50] flex flex-col items-center justify-center bg-white"
+            initial={{ opacity: 0, scale: 0.97 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
+            data-ocid="live_map.ride_complete.modal"
+          >
+            <div className="w-full max-w-sm px-6 text-center">
+              <div className="text-6xl mb-4">🏁</div>
+              <h2
+                className="text-2xl font-black mb-1"
+                style={{ color: "#111827" }}
+              >
+                Yolculuk Tamamlandı!
+              </h2>
+              <p className="text-sm mb-6" style={{ color: "#6B7280" }}>
+                Güvenli bir yolculuktu — veriler silindi
+              </p>
+              <div className="grid grid-cols-3 gap-3 mb-6">
+                <div
+                  className="flex flex-col items-center py-3 rounded-2xl"
+                  style={{ background: "#F9FAFB" }}
+                >
+                  <p className="text-xs mb-1" style={{ color: "#9CA3AF" }}>
+                    Süre
+                  </p>
+                  <p
+                    className="text-base font-black"
+                    style={{ color: "#111827" }}
+                  >
+                    {osrmDuration !== null ? formatEta(osrmDuration) : "—"}
+                  </p>
+                </div>
+                <div
+                  className="flex flex-col items-center py-3 rounded-2xl"
+                  style={{ background: "#F9FAFB" }}
+                >
+                  <p className="text-xs mb-1" style={{ color: "#9CA3AF" }}>
+                    Mesafe
+                  </p>
+                  <p
+                    className="text-base font-black"
+                    style={{ color: "#111827" }}
+                  >
+                    {osrmDistance !== null ? formatDist(osrmDistance) : "—"}
+                  </p>
+                </div>
+                <div
+                  className="flex flex-col items-center py-3 rounded-2xl"
+                  style={{ background: "#F9FAFB" }}
+                >
+                  <p className="text-xs mb-1" style={{ color: "#9CA3AF" }}>
+                    Ücret
+                  </p>
+                  <p
+                    className="text-base font-black"
+                    style={{ color: "#111827" }}
+                  >
+                    {price !== null ? `₺${price}` : "—"}
+                  </p>
+                </div>
+              </div>
+              <div
+                className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl mb-4"
+                style={{ background: "#F0FDF4", border: "1px solid #BBF7D0" }}
+              >
+                <span>⚡</span>
+                <p
+                  className="text-sm font-semibold"
+                  style={{ color: "#15803D" }}
+                >
+                  Karma +2 kazandı
+                </p>
+              </div>
+              <div
+                className="flex items-center gap-3 px-4 py-3 rounded-2xl mb-6"
+                style={{ background: "#F9FAFB" }}
+              >
+                <div
+                  className="w-10 h-10 rounded-full flex items-center justify-center text-xl flex-shrink-0"
+                  style={{ background: "#E5E7EB" }}
+                >
+                  👻
+                </div>
+                <div className="text-left">
+                  <p className="text-sm font-bold" style={{ color: "#111827" }}>
+                    Ghost Sürücü
+                  </p>
+                  <p className="text-xs" style={{ color: "#6B7280" }}>
+                    ⭐ 4.9 · Anonim
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setRideCompleted(false);
+                  setPhase("SEARCH");
+                  setActiveDest({ lat: 41.0082, lng: 28.9784 });
+                  setDestLabel("");
+                  setPanelMinimized(false);
+                }}
+                className="w-full py-4 rounded-2xl font-bold text-white"
+                style={{ background: "#276EF1" }}
+                data-ocid="live_map.new_ride.button"
+              >
+                Yeni Yolculuk
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ── PANIC MODE OVERLAY ────────────────────────────────────── */}
       <AnimatePresence>
@@ -1073,6 +1311,16 @@ export default function LiveRideMapPage({
             transition={{ type: "spring", stiffness: 350, damping: 38 }}
             data-ocid="live_map.riding.panel"
           >
+            {/* Minimize toggle */}
+            <button
+              type="button"
+              onClick={() => setPanelMinimized(!panelMinimized)}
+              className="absolute -top-10 right-4 w-8 h-8 rounded-full bg-white shadow-lg flex items-center justify-center text-gray-600 text-sm"
+              style={{ zIndex: 1 }}
+              data-ocid="live_map.panel.toggle"
+            >
+              {panelMinimized ? "▲" : "▼"}
+            </button>
             {/* Drag handle */}
             <div className="flex justify-center pt-3 pb-1">
               <div
@@ -1081,182 +1329,190 @@ export default function LiveRideMapPage({
               />
             </div>
 
-            <div className="px-5 pb-6 pt-2">
-              {/* Driver row */}
-              <div className="flex items-center gap-3 mb-3">
-                <div
-                  className="w-12 h-12 rounded-full flex items-center justify-center text-2xl flex-shrink-0"
-                  style={{
-                    background: "#F6F6F6",
-                    border: "1.5px solid #E5E7EB",
-                  }}
-                >
-                  👻
+            {!panelMinimized && (
+              <div className="px-5 pb-6 pt-2">
+                {/* Driver row */}
+                <div className="flex items-center gap-3 mb-3">
+                  <div
+                    className="w-12 h-12 rounded-full flex items-center justify-center text-2xl flex-shrink-0"
+                    style={{
+                      background: "#F6F6F6",
+                      border: "1.5px solid #E5E7EB",
+                    }}
+                  >
+                    👻
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p
+                      className="font-bold text-base"
+                      style={{ color: "#141414" }}
+                    >
+                      Ghost Sürücü
+                    </p>
+                    <p className="text-sm" style={{ color: "#6B7280" }}>
+                      ⭐ 4.9 · {SESSION_ID}
+                    </p>
+                  </div>
+                  <div
+                    className="px-3 py-1 rounded-full text-xs font-bold"
+                    style={{
+                      background: rideCompleted ? "#D1FAE5" : "#EBF2FE",
+                      color: rideCompleted ? "#065F46" : "#276EF1",
+                    }}
+                  >
+                    {rideCompleted ? "✓ Tamamlandı" : "Yolda"}
+                  </div>
                 </div>
-                <div className="flex-1 min-w-0">
+
+                <div className="h-px mb-3" style={{ background: "#F3F4F6" }} />
+
+                {/* Stats row */}
+                <div className="flex items-center mb-4">
+                  <div className="flex-1 text-center">
+                    <p
+                      className="text-xs uppercase tracking-wide"
+                      style={{ color: "#9CA3AF" }}
+                    >
+                      ETA
+                    </p>
+                    <p
+                      className="text-xl font-black"
+                      style={{ color: "#1a1a1a" }}
+                    >
+                      {formatEta(etaCountdown)}
+                    </p>
+                  </div>
+                  <div
+                    className="w-px h-10"
+                    style={{ background: "#E5E7EB" }}
+                  />
+                  <div className="flex-1 text-center">
+                    <p
+                      className="text-xs uppercase tracking-wide"
+                      style={{ color: "#9CA3AF" }}
+                    >
+                      Mesafe
+                    </p>
+                    <p
+                      className="text-xl font-black"
+                      style={{ color: "#1a1a1a" }}
+                    >
+                      {osrmDistance !== null ? formatDist(osrmDistance) : "—"}
+                    </p>
+                  </div>
+                  <div
+                    className="w-px h-10"
+                    style={{ background: "#E5E7EB" }}
+                  />
+                  <div className="flex-1 text-center">
+                    <p
+                      className="text-xs uppercase tracking-wide"
+                      style={{ color: "#9CA3AF" }}
+                    >
+                      Ücret
+                    </p>
+                    <p
+                      className="text-xl font-black"
+                      style={{ color: "#1a1a1a" }}
+                    >
+                      {price !== null ? `₺${price}` : "—"}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Destination row */}
+                <div
+                  className="flex items-center gap-3 px-4 py-3 rounded-2xl mb-4"
+                  style={{ background: "#F9FAFB" }}
+                >
+                  <div
+                    className="w-2.5 h-2.5 rounded-sm flex-shrink-0"
+                    style={{ background: "#1a1a1a" }}
+                  />
                   <p
-                    className="font-bold text-base"
+                    className="text-sm font-semibold truncate"
                     style={{ color: "#141414" }}
                   >
-                    Ghost Sürücü
-                  </p>
-                  <p className="text-sm" style={{ color: "#6B7280" }}>
-                    ⭐ 4.9 · {SESSION_ID}
+                    {destLabel || "Hedef"}
                   </p>
                 </div>
-                <div
-                  className="px-3 py-1 rounded-full text-xs font-bold"
-                  style={{
-                    background: rideCompleted ? "#D1FAE5" : "#EBF2FE",
-                    color: rideCompleted ? "#065F46" : "#276EF1",
-                  }}
-                >
-                  {rideCompleted ? "✓ Tamamlandı" : "Yolda"}
-                </div>
-              </div>
 
-              <div className="h-px mb-3" style={{ background: "#F3F4F6" }} />
+                {/* Completed banner */}
+                <AnimatePresence>
+                  {rideCompleted && (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="flex items-center gap-3 px-4 py-3 rounded-2xl mb-4"
+                      style={{
+                        background: "#F0FDF4",
+                        border: "1px solid #BBF7D0",
+                      }}
+                    >
+                      <span className="text-2xl">🏁</span>
+                      <div>
+                        <p
+                          className="text-sm font-bold"
+                          style={{ color: "#166534" }}
+                        >
+                          Yolculuk tamamlandı!
+                        </p>
+                        <p className="text-xs" style={{ color: "#4ADE80" }}>
+                          Nakit ödeme · Veriler silindi
+                        </p>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
-              {/* Stats row */}
-              <div className="flex items-center mb-4">
-                <div className="flex-1 text-center">
-                  <p
-                    className="text-xs uppercase tracking-wide"
-                    style={{ color: "#9CA3AF" }}
-                  >
-                    ETA
-                  </p>
-                  <p
-                    className="text-xl font-black"
-                    style={{ color: "#1a1a1a" }}
-                  >
-                    {formatEta(etaCountdown)}
-                  </p>
-                </div>
-                <div className="w-px h-10" style={{ background: "#E5E7EB" }} />
-                <div className="flex-1 text-center">
-                  <p
-                    className="text-xs uppercase tracking-wide"
-                    style={{ color: "#9CA3AF" }}
-                  >
-                    Mesafe
-                  </p>
-                  <p
-                    className="text-xl font-black"
-                    style={{ color: "#1a1a1a" }}
-                  >
-                    {osrmDistance !== null ? formatDist(osrmDistance) : "—"}
-                  </p>
-                </div>
-                <div className="w-px h-10" style={{ background: "#E5E7EB" }} />
-                <div className="flex-1 text-center">
-                  <p
-                    className="text-xs uppercase tracking-wide"
-                    style={{ color: "#9CA3AF" }}
-                  >
-                    Ücret
-                  </p>
-                  <p
-                    className="text-xl font-black"
-                    style={{ color: "#1a1a1a" }}
-                  >
-                    {price !== null ? `₺${price}` : "—"}
-                  </p>
-                </div>
-              </div>
-
-              {/* Destination row */}
-              <div
-                className="flex items-center gap-3 px-4 py-3 rounded-2xl mb-4"
-                style={{ background: "#F9FAFB" }}
-              >
-                <div
-                  className="w-2.5 h-2.5 rounded-sm flex-shrink-0"
-                  style={{ background: "#1a1a1a" }}
-                />
-                <p
-                  className="text-sm font-semibold truncate"
-                  style={{ color: "#141414" }}
-                >
-                  {destLabel || "Hedef"}
-                </p>
-              </div>
-
-              {/* Completed banner */}
-              <AnimatePresence>
-                {rideCompleted && (
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="flex items-center gap-3 px-4 py-3 rounded-2xl mb-4"
-                    style={{
-                      background: "#F0FDF4",
-                      border: "1px solid #BBF7D0",
-                    }}
-                  >
-                    <span className="text-2xl">🏁</span>
-                    <div>
-                      <p
-                        className="text-sm font-bold"
-                        style={{ color: "#166534" }}
-                      >
-                        Yolculuk tamamlandı!
-                      </p>
-                      <p className="text-xs" style={{ color: "#4ADE80" }}>
-                        Nakit ödeme · Veriler silindi
-                      </p>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Action buttons */}
-              <div className="flex gap-2">
-                {!panicMode ? (
+                {/* Action buttons */}
+                <div className="flex gap-2">
+                  {!panicMode ? (
+                    <button
+                      type="button"
+                      onClick={handlePanic}
+                      className="flex-1 py-3.5 rounded-2xl text-sm font-bold transition-all active:scale-95"
+                      style={{
+                        background: "#FEF2F2",
+                        border: "1px solid #FECACA",
+                        color: "#DC2626",
+                      }}
+                      data-ocid="live_map.panic.button"
+                    >
+                      🚨 Panik
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleResumeTracking}
+                      className="flex-1 py-3.5 rounded-2xl text-sm font-bold transition-all active:scale-95"
+                      style={{
+                        background: "#F0FDF4",
+                        border: "1px solid #BBF7D0",
+                        color: "#15803D",
+                      }}
+                      data-ocid="live_map.resume_tracking.button"
+                    >
+                      ▶ Takip
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={handlePanic}
-                    className="flex-1 py-3.5 rounded-2xl text-sm font-bold transition-all active:scale-95"
+                    onClick={handleExit}
+                    className="px-5 py-3.5 rounded-2xl text-sm font-medium transition-all active:scale-95"
                     style={{
-                      background: "#FEF2F2",
-                      border: "1px solid #FECACA",
-                      color: "#DC2626",
+                      background: "#F9FAFB",
+                      border: "1px solid #E5E7EB",
+                      color: "#9CA3AF",
                     }}
-                    data-ocid="live_map.panic.button"
+                    data-ocid="live_map.exit.button"
                   >
-                    🚨 Panik
+                    Çıkış
                   </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleResumeTracking}
-                    className="flex-1 py-3.5 rounded-2xl text-sm font-bold transition-all active:scale-95"
-                    style={{
-                      background: "#F0FDF4",
-                      border: "1px solid #BBF7D0",
-                      color: "#15803D",
-                    }}
-                    data-ocid="live_map.resume_tracking.button"
-                  >
-                    ▶ Takip
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleExit}
-                  className="px-5 py-3.5 rounded-2xl text-sm font-medium transition-all active:scale-95"
-                  style={{
-                    background: "#F9FAFB",
-                    border: "1px solid #E5E7EB",
-                    color: "#9CA3AF",
-                  }}
-                  data-ocid="live_map.exit.button"
-                >
-                  Çıkış
-                </button>
+                </div>
               </div>
-            </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

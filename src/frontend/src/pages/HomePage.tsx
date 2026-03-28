@@ -1,4 +1,5 @@
 import { Switch } from "@/components/ui/switch";
+import { useDarkMode } from "@/hooks/useDarkMode";
 import { MessageCircle, Radio, Search, Shield, Siren, Zap } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
@@ -60,6 +61,7 @@ export default function HomePage({
   const [role, setRole] = useState<"rider" | "driver">("rider");
   const [driverOnline, setDriverOnline] = useState(false);
   const [sessionId] = useState(() => generateSessionId());
+  const [dark, setDark] = useDarkMode();
 
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return;
@@ -177,6 +179,15 @@ export default function HomePage({
             {sessionId}
           </span>
         </div>
+        <button
+          type="button"
+          onClick={() => setDark(!dark)}
+          className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
+          style={{ background: dark ? "#374151" : "#F3F5F7" }}
+          data-ocid="home.darkmode.toggle"
+        >
+          {dark ? "☀️" : "🌙"}
+        </button>
       </div>
 
       {/* ───── BOTTOM SHEET ───── */}
@@ -245,6 +256,26 @@ export default function HomePage({
                 })}
               </div>
 
+              <div
+                className="flex items-center gap-2 px-3 py-2 rounded-xl mb-3"
+                style={{ background: "#EBF2FE" }}
+              >
+                <motion.div
+                  animate={{ scale: [1, 1.2, 1] }}
+                  transition={{
+                    repeat: Number.POSITIVE_INFINITY,
+                    duration: 1.5,
+                  }}
+                >
+                  <div
+                    className="w-2 h-2 rounded-full"
+                    style={{ background: "#276EF1" }}
+                  />
+                </motion.div>
+                <p className="text-xs font-medium" style={{ color: "#276EF1" }}>
+                  3 sürücü yakında · Ortalama 4 dk
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={() => onStartRider(sessionId)}
@@ -316,6 +347,29 @@ export default function HomePage({
                 })}
               </div>
 
+              {driverOnline && (
+                <div
+                  className="flex items-center gap-2 px-3 py-2 rounded-xl mb-3"
+                  style={{ background: "#F0FDF4" }}
+                >
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{
+                      repeat: Number.POSITIVE_INFINITY,
+                      duration: 2,
+                      ease: "linear",
+                    }}
+                  >
+                    <div className="text-base">🔍</div>
+                  </motion.div>
+                  <p
+                    className="text-xs font-medium"
+                    style={{ color: "#15803D" }}
+                  >
+                    Yolcu aranıyor... 2 aktif talep
+                  </p>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={() => onStartDriver(sessionId)}

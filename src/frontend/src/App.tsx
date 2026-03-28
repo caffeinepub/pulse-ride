@@ -1,6 +1,7 @@
 import BottomTabBar from "@/components/BottomTabBar";
 import PWAInstallBanner from "@/components/PWAInstallBanner";
 import { Toaster } from "@/components/ui/sonner";
+import { useDarkMode } from "@/hooks/useDarkMode";
 import DriverDashboard from "@/pages/DriverDashboard";
 import GhostAlarmSetupPage from "@/pages/GhostAlarmSetupPage";
 import GhostChatPage from "@/pages/GhostChatPage";
@@ -59,6 +60,7 @@ export default function App() {
   const [view, setView] = useState<AppView>("landing");
   const [session, setSession] = useState<SessionState | null>(null);
   const [userPrice, setUserPrice] = useState<number | null>(null);
+  useDarkMode();
 
   const handleSessionCreated = (
     sessionId: string,
