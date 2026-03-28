@@ -280,6 +280,16 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
               });
             }
             if (numIdx + 1 > newIndex) newIndex = numIdx + 1;
+            // Detect incoming GHOST CALL invite
+            if (
+              numIdx >= lastMsgIndex &&
+              senderId !== myId &&
+              text.startsWith("__CALL__:INVITE:") &&
+              !showCallOverlay
+            ) {
+              setIsCreator(false);
+              setShowCallOverlay(true);
+            }
           }
           if (newMsgs.length > 0) {
             setMessages((prev) => [...prev, ...newMsgs]);
@@ -302,6 +312,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
     partnerId,
     lastMsgIndex,
     deleteMode,
+    showCallOverlay,
   ]);
 
   // Auto scroll

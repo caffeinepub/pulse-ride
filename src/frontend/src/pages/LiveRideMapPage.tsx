@@ -1,3 +1,4 @@
+import { useActor } from "@/hooks/useActor";
 /* eslint-disable */
 // @ts-nocheck
 import { AnimatePresence, motion } from "motion/react";
@@ -87,6 +88,19 @@ export default function LiveRideMapPage({
   );
   const [pickupLabel, setPickupLabel] = useState<string>("Mevcut Konum");
   const [destLabel, setDestLabel] = useState<string>("");
+  const [destCountryCode, setDestCountryCode] = useState<string>("tr");
+
+  // ── Backend actor & matching state ───────────────────────────────────────
+  const { actor } = useActor();
+  const [_rideId, setRideId] = useState<string | null>(null);
+  const [matchStatus, setMatchStatus] = useState<
+    "idle" | "searching" | "matched"
+  >("idle");
+  const [searchTimer, setSearchTimer] = useState(0);
+  const [backendSessionId, setBackendSessionId] = useState<string | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const searchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const rideIdRef = useRef<string | null>(null);
 
   // ── GPS detection ──────────────────────────────────────────────────────
   const [gpsDetecting, setGpsDetecting] = useState(true);
@@ -158,7 +172,7 @@ export default function LiveRideMapPage({
       setSearchLoading(true);
       try {
         const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(val)}&format=json&limit=7&accept-language=tr,en&countrycodes=tr,de,fr,nl,gb,be`,
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(val)}&format=json&limit=7&addressdetails=1&accept-language=tr,en&countrycodes=tr,de,fr,nl,gb,be,at,ch,it,es,pt,pl,cz,hu,ro,se,no,dk,fi,ie,gr`,
         );
         const data = await res.json();
         setSearchResults(data);
@@ -176,6 +190,19 @@ export default function LiveRideMapPage({
     };
     setActiveDest(coord);
     setDestLabel(result.display_name.split(",").slice(0, 2).join(", "));
+    const cc = result.address?.country_code || "";
+    setDestCountryCode(cc || "tr");
+    if (!cc) {
+      fetch(
+        `https://nominatim.openstreetmap.org/reverse?lat=${coord.lat}&lon=${coord.lng}&format=json`,
+      )
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.address?.country_code)
+            setDestCountryCode(d.address.country_code);
+        })
+        .catch(() => {});
+    }
     setSearchResults([]);
     setSearchQuery("");
     // Save to recent addresses
@@ -215,9 +242,49 @@ export default function LiveRideMapPage({
   const [rideCompleted, setRideCompleted] = useState(false);
   const [panelMinimized, setPanelMinimized] = useState(false);
 
-  // Estimated price
-  const price =
-    osrmDistance !== null ? Math.round((osrmDistance / 1000) * 12 + 15) : null;
+  // Estimated price — EUR for Europe, TL for Turkey
+  const europeanCountryCodes = [
+    "de",
+    "fr",
+    "nl",
+    "gb",
+    "be",
+    "at",
+    "ch",
+    "it",
+    "es",
+    "pt",
+    "pl",
+    "cz",
+    "hu",
+    "ro",
+    "se",
+    "no",
+    "dk",
+    "fi",
+    "ie",
+    "gr",
+    "hr",
+    "sk",
+    "si",
+    "bg",
+    "lt",
+    "lv",
+    "ee",
+    "lu",
+    "mt",
+    "cy",
+  ];
+  const isEuropean = europeanCountryCodes.includes(
+    destCountryCode?.toLowerCase() || "",
+  );
+  const priceRaw =
+    osrmDistance !== null
+      ? (osrmDistance / 1000) * (isEuropean ? 1.2 : 12) + (isEuropean ? 2 : 15)
+      : null;
+  // European: ~€1.5/km market average × 0.80 = €1.2/km + base€2
+  const price = priceRaw !== null ? Math.round(priceRaw) : null;
+  const priceCurrency = isEuropean ? "€" : "₺";
 
   // ── Map init — KEY trick: remounts when coords change ─────────────────
   // The map container gets key={activePickup.lat+","+activeDest.lat}
@@ -440,11 +507,90 @@ export default function LiveRideMapPage({
     return () => clearInterval(id);
   }, [phase]);
 
+  // ── Driver match polling ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (matchStatus !== "searching" || !actor) return;
+
+    setSearchTimer(0);
+    let stopped = false;
+
+    searchTimerRef.current = setInterval(
+      () => setSearchTimer((t) => t + 1),
+      1000,
+    );
+
+    const poll = async () => {
+      const currentRideId = rideIdRef.current;
+      if (!currentRideId) return;
+      try {
+        const [status] = await actor.getRideStatus(currentRideId);
+        if (status === "matched" || status === "active") {
+          stopped = true;
+          setMatchStatus("matched");
+          toast.success("🚗 Sürücü bulundu! Yolculuk başlıyor...");
+          if (pollingRef.current) clearInterval(pollingRef.current);
+          if (searchTimerRef.current) clearInterval(searchTimerRef.current);
+        }
+      } catch {}
+    };
+
+    pollingRef.current = setInterval(() => {
+      if (!stopped) poll();
+    }, 3000);
+    // Also poll immediately after a short delay to catch quick matches
+    setTimeout(poll, 500);
+
+    return () => {
+      stopped = true;
+      if (pollingRef.current) clearInterval(pollingRef.current);
+      if (searchTimerRef.current) clearInterval(searchTimerRef.current);
+    };
+  }, [matchStatus, actor]);
+
+  // Create a real backend session on mount
+  useEffect(() => {
+    if (!actor || backendSessionId) return;
+    actor
+      .createSession("rider")
+      .then((sid) => {
+        setBackendSessionId(sid);
+      })
+      .catch(() => {});
+  }, [actor, backendSessionId]);
+
   // ── Handlers ──────────────────────────────────────────────────────────
-  const handleConfirm = useCallback(() => {
-    setPhase("RIDING");
-    toast.success("🚗 Yolculuk başladı!");
-  }, []);
+  const handleConfirm = useCallback(async () => {
+    if (!actor) {
+      toast.error("Bağlantı bekleniyor, lütfen tekrar deneyin");
+      return;
+    }
+    try {
+      // Ensure we have a valid backend session — create one on-the-fly if missing
+      let sid = backendSessionId;
+      if (!sid) {
+        sid = await actor.createSession("rider");
+        setBackendSessionId(sid);
+      }
+      const pickupLabelVal = pickupLabel || "Mevcut Konum";
+      const destLabelVal = destLabel || "Hedef";
+      const [rid] = await actor.createRideRequest(
+        sid,
+        pickupLabelVal,
+        destLabelVal,
+        false,
+      );
+      await actor.approveRide(rid, sid);
+      rideIdRef.current = rid;
+      setRideId(rid);
+      setMatchStatus("searching");
+      setPhase("RIDING");
+      toast.success("🔍 Sürücü aranıyor...");
+    } catch (err) {
+      console.error("Ride request failed:", err);
+      toast.error("Yolculuk talebi oluşturulamadı — tekrar deneyin");
+      setPhase("CONFIRM");
+    }
+  }, [actor, backendSessionId, pickupLabel, destLabel]);
 
   const handlePanic = useCallback(() => {
     setPanicFlash(true);
@@ -1063,7 +1209,7 @@ export default function LiveRideMapPage({
                     className="text-base font-black"
                     style={{ color: "#111827" }}
                   >
-                    {price !== null ? `₺${price}` : "—"}
+                    {price !== null ? `${priceCurrency}${price}` : "—"}
                   </p>
                 </div>
               </div>
@@ -1223,7 +1369,7 @@ export default function LiveRideMapPage({
                       className="ml-auto font-black text-lg"
                       style={{ color: "#141414" }}
                     >
-                      {price !== null ? `₺${price}` : "—"}
+                      {price !== null ? `${priceCurrency}${price}` : "—"}
                     </span>
                   </div>
                   <div className="flex items-center gap-3 mt-1">
@@ -1333,8 +1479,49 @@ export default function LiveRideMapPage({
               />
             </div>
 
+            {/* Always-visible searching banner */}
+            {matchStatus === "searching" && (
+              <div
+                className="flex items-center gap-3 mb-4 px-3 py-3 rounded-2xl"
+                style={{
+                  background: "#EFF6FF",
+                  border: "1.5px solid #BFDBFE",
+                }}
+              >
+                <div className="animate-spin text-lg">🔍</div>
+                <div className="flex-1">
+                  <p className="text-sm font-bold" style={{ color: "#1D4ED8" }}>
+                    Sürücü Aranıyor...
+                  </p>
+                  <p className="text-xs mt-0.5" style={{ color: "#3B82F6" }}>
+                    {Math.floor(searchTimer / 60)
+                      .toString()
+                      .padStart(2, "0")}
+                    :{(searchTimer % 60).toString().padStart(2, "0")} — Anonim
+                    eşleşme aktif
+                  </p>
+                </div>
+              </div>
+            )}
             {!panelMinimized && (
               <div className="px-5 pb-6 pt-2">
+                {matchStatus === "matched" && (
+                  <div
+                    className="flex items-center gap-3 mb-4 px-3 py-3 rounded-2xl"
+                    style={{
+                      background: "#F0FDF4",
+                      border: "1.5px solid #BBF7D0",
+                    }}
+                  >
+                    <span className="text-lg">✅</span>
+                    <p
+                      className="text-sm font-bold"
+                      style={{ color: "#15803D" }}
+                    >
+                      Sürücünüz bulundu!
+                    </p>
+                  </div>
+                )}
                 {/* Driver row */}
                 <div className="flex items-center gap-3 mb-3">
                   <div
@@ -1419,7 +1606,7 @@ export default function LiveRideMapPage({
                       className="text-xl font-black"
                       style={{ color: "#1a1a1a" }}
                     >
-                      {price !== null ? `₺${price}` : "—"}
+                      {price !== null ? `${priceCurrency}${price}` : "—"}
                     </p>
                   </div>
                 </div>

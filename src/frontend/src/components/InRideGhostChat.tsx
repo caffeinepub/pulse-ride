@@ -131,6 +131,7 @@ export default function InRideGhostChat({
   const [showEmojiPanel, setShowEmojiPanel] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showCallOverlay, setShowCallOverlay] = useState(false);
+  const [isCallInitiator, setIsCallInitiator] = useState(false);
   const [lastMsgIndex, setLastMsgIndex] = useState(0);
   const [msgCount, setMsgCount] = useState(0);
 
@@ -288,6 +289,16 @@ export default function InRideGhostChat({
               });
             }
             if (numIdx + 1 > newIndex) newIndex = numIdx + 1;
+            // Detect incoming GHOST CALL invite
+            if (
+              numIdx >= lastMsgIndex &&
+              senderId !== myId &&
+              text.startsWith("__CALL__:INVITE:") &&
+              !showCallOverlay
+            ) {
+              setIsCallInitiator(false);
+              setShowCallOverlay(true);
+            }
           }
           if (newMsgs.length > 0) {
             setMessages((prev) => [...prev, ...newMsgs]);
@@ -311,6 +322,7 @@ export default function InRideGhostChat({
     lastMsgIndex,
     deleteMode,
     partnerId,
+    showCallOverlay,
   ]);
 
   // Message countdown & expiry
@@ -494,7 +506,10 @@ export default function InRideGhostChat({
           {connected && (
             <button
               type="button"
-              onClick={() => setShowCallOverlay(true)}
+              onClick={() => {
+                setIsCallInitiator(true);
+                setShowCallOverlay(true);
+              }}
               className="p-2 rounded-full transition-all active:scale-90"
               style={{
                 background: "rgba(46,230,214,0.1)",
@@ -860,10 +875,15 @@ export default function InRideGhostChat({
         {showCallOverlay && (
           <GhostCallOverlay
             isOpen={showCallOverlay}
-            channelCode={channelCode}
+            channelCode={`${channelCode}-call`}
             myId={myId}
-            callerIds={[myId]}
-            onClose={() => setShowCallOverlay(false)}
+            callerIds={[myId, partnerId]}
+            actor={actor as any}
+            isInitiator={isCallInitiator}
+            onClose={() => {
+              setShowCallOverlay(false);
+              setIsCallInitiator(false);
+            }}
           />
         )}
       </AnimatePresence>

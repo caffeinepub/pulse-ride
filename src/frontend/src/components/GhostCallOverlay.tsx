@@ -22,6 +22,36 @@ const STUN_SERVERS = [
   { urls: "stun:stun1.l.google.com:19302" },
 ];
 
+const TRANSLATION_LANGS = [
+  "TR→EN",
+  "TR→DE",
+  "TR→FR",
+  "EN→TR",
+  "KAPALI",
+] as const;
+type TranslationLang = (typeof TRANSLATION_LANGS)[number];
+
+function playRingTone(ctx: AudioContext): OscillatorNode[] {
+  const oscs: OscillatorNode[] = [];
+  const playBeep = (startTime: number) => {
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.connect(g);
+    g.connect(ctx.destination);
+    osc.frequency.value = 480;
+    g.gain.setValueAtTime(0, startTime);
+    g.gain.linearRampToValueAtTime(0.2, startTime + 0.05);
+    g.gain.setValueAtTime(0.2, startTime + 0.4);
+    g.gain.linearRampToValueAtTime(0, startTime + 0.45);
+    osc.start(startTime);
+    osc.stop(startTime + 0.5);
+    oscs.push(osc);
+  };
+  const now = ctx.currentTime;
+  for (let i = 0; i < 6; i++) playBeep(now + i * 0.8);
+  return oscs;
+}
+
 function playConnectTone(ctx: AudioContext) {
   const osc = ctx.createOscillator();
   const g = ctx.createGain();
@@ -53,11 +83,12 @@ function playDisconnectTone(ctx: AudioContext) {
 }
 
 // Apply AI voice masking effect chain
+// Returns processed stream for WebRTC (NOT connected to local speakers)
 function buildEffectChain(
   ctx: AudioContext,
   source: MediaStreamAudioSourceNode,
   style: VoiceStyle,
-): { analyser: AnalyserNode; destination: AudioNode } {
+): { analyser: AnalyserNode; processedStream: MediaStream } {
   const lowShelf = ctx.createBiquadFilter();
   lowShelf.type = "lowshelf";
   lowShelf.frequency.value = 300;
@@ -80,16 +111,24 @@ function buildEffectChain(
   const gain = ctx.createGain();
   gain.gain.value = 0.7;
 
+  // Analyser for waveform visualization ONLY - NOT connected to speakers
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 64;
+
+  // MediaStreamDestination for WebRTC - this is what the other party hears
+  const streamDest = ctx.createMediaStreamDestination();
 
   source.connect(lowShelf);
   lowShelf.connect(waveShaper);
   waveShaper.connect(highShelf);
   highShelf.connect(gain);
+  // Connect to analyser for visualization (no speaker output)
   gain.connect(analyser);
+  // Connect to stream destination for WebRTC transmission
+  gain.connect(streamDest);
+  // NOTE: NOT connected to ctx.destination - prevents local echo
 
-  return { analyser, destination: gain };
+  return { analyser, processedStream: streamDest.stream };
 }
 
 export default function GhostCallOverlay({
@@ -114,13 +153,18 @@ export default function GhostCallOverlay({
   const [rtcStatus, setRtcStatus] = useState<
     "idle" | "signaling" | "connected" | "failed"
   >("idle");
+  // incoming = ringing (non-initiator waiting to accept), calling = initiator waiting
+  const [callPhase, setCallPhase] = useState<"calling" | "incoming" | "active">(
+    isInitiator ? "calling" : "incoming",
+  );
+  const [translation, setTranslation] = useState<TranslationLang>("KAPALI");
+  const [translatedText, setTranslatedText] = useState<string>("");
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const gainDestRef = useRef<AudioNode | null>(null);
+  const processedStreamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
   const isMutedRef = useRef(false);
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -128,10 +172,15 @@ export default function GhostCallOverlay({
   const sigPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sigIndexRef = useRef<bigint>(BigInt(0));
   const processedSigIds = useRef<Set<string>>(new Set());
+  const ringCtxRef = useRef<AudioContext | null>(null);
+  const muteTracksRef = useRef<MediaStreamTrack[]>([]);
 
-  // Keep muted ref in sync
   useEffect(() => {
     isMutedRef.current = isMuted;
+    // Mute/unmute audio tracks directly
+    for (const track of muteTracksRef.current) {
+      track.enabled = !isMuted;
+    }
   }, [isMuted]);
 
   // Waveform animation loop
@@ -171,17 +220,17 @@ export default function GhostCallOverlay({
     }
   };
 
-  // Set up WebRTC peer connection
-  const setupPeerConnection = (localStream: MediaStream) => {
+  // Set up WebRTC peer connection using processed (AI-masked) audio stream
+  const setupPeerConnection = (processedStream: MediaStream) => {
     const pc = new RTCPeerConnection({ iceServers: STUN_SERVERS });
     pcRef.current = pc;
 
-    // Add local tracks
-    for (const track of localStream.getTracks()) {
-      pc.addTrack(track, localStream);
+    // Add processed/masked audio tracks (NOT raw microphone)
+    for (const track of processedStream.getTracks()) {
+      pc.addTrack(track, processedStream);
     }
 
-    // Play remote audio
+    // Play remote audio through speakers
     pc.ontrack = (event) => {
       const [remoteStream] = event.streams;
       if (!remoteAudioRef.current) {
@@ -196,7 +245,6 @@ export default function GhostCallOverlay({
       setRtcStatus("connected");
     };
 
-    // Send ICE candidates via backend signaling
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         sendSignal("ICE", event.candidate);
@@ -246,7 +294,11 @@ export default function GhostCallOverlay({
             continue;
           }
           if (processedSigIds.current.has(msgKey)) continue;
-          if (!text.startsWith("__CALL__:")) continue;
+          if (!text.startsWith("__CALL__:")) {
+            if (Number(idx) + 1 > Number(sigIndexRef.current))
+              sigIndexRef.current = BigInt(Number(idx) + 1);
+            continue;
+          }
 
           processedSigIds.current.add(msgKey);
           if (Number(idx) + 1 > Number(sigIndexRef.current))
@@ -259,7 +311,16 @@ export default function GhostCallOverlay({
           try {
             const payload = JSON.parse(payloadStr);
 
-            if (sigType === "OFFER" && !isInitiator) {
+            if (sigType === "INVITE" && !isInitiator) {
+              // Incoming call signal - already showing incoming UI, just confirm
+              setCallPhase("incoming");
+            } else if (sigType === "ACCEPTED" && isInitiator) {
+              // Other party accepted - start audio and WebRTC
+              setCallPhase("active");
+              await startActiveCall(pc);
+            } else if (sigType === "REJECTED" && isInitiator) {
+              handleClose();
+            } else if (sigType === "OFFER" && !isInitiator) {
               await pc.setRemoteDescription(new RTCSessionDescription(payload));
               const answer = await pc.createAnswer();
               await pc.setLocalDescription(answer);
@@ -286,42 +347,55 @@ export default function GhostCallOverlay({
     }, 800);
   };
 
-  // Start audio (microphone + AI masking effect) + WebRTC
+  // Start active call (after accept)
+  const startActiveCall = async (pc: RTCPeerConnection) => {
+    const processedStream = processedStreamRef.current;
+    if (!processedStream) return;
+    if (isInitiator) {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await sendSignal("OFFER", offer);
+    }
+    // Start timer
+    setElapsed(0);
+    timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
+    playConnectTone(audioCtxRef.current!);
+  };
+
+  // Start audio (microphone + AI masking effect)
   const startAudio = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: false,
+      });
       streamRef.current = stream;
+      muteTracksRef.current = stream.getAudioTracks();
 
       const ctx = new AudioContext();
       audioCtxRef.current = ctx;
 
       const source = ctx.createMediaStreamSource(stream);
-      sourceRef.current = source;
 
-      const { analyser, destination } = buildEffectChain(
+      const { analyser, processedStream } = buildEffectChain(
         ctx,
         source,
         voiceStyle,
       );
-      gainDestRef.current = destination;
+      processedStreamRef.current = processedStream;
       analyserRef.current = analyser;
-      analyser.connect(ctx.destination);
-
+      // Waveform visualization
       startWaveformLoop(analyser);
       setMicPermission("granted");
-      playConnectTone(ctx);
 
-      // Set up WebRTC if actor and channelCode provided
       if (actor && channelCode && myId) {
-        const pc = setupPeerConnection(stream);
+        const pc = setupPeerConnection(processedStream);
         setRtcStatus("signaling");
         startSignalingPoll(pc);
 
         if (isInitiator) {
-          // Create and send offer
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          await sendSignal("OFFER", offer);
+          // Send INVITE signal so other party knows call is coming
+          await sendSignal("INVITE", { callerId: myId });
         }
       }
     } catch {
@@ -329,11 +403,24 @@ export default function GhostCallOverlay({
     }
   };
 
-  // Stop audio and WebRTC cleanup
+  // Stop ring tone
+  const stopRingTone = () => {
+    if (ringCtxRef.current && ringCtxRef.current.state !== "closed") {
+      ringCtxRef.current.close();
+      ringCtxRef.current = null;
+    }
+  };
+
+  // Stop all audio and WebRTC
   const stopAudio = () => {
+    stopRingTone();
     if (sigPollRef.current) {
       clearInterval(sigPollRef.current);
       sigPollRef.current = null;
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
     }
     if (pcRef.current) {
       pcRef.current.close();
@@ -359,47 +446,97 @@ export default function GhostCallOverlay({
       for (const track of streamRef.current.getTracks()) track.stop();
       streamRef.current = null;
     }
-    sourceRef.current = null;
-    gainDestRef.current = null;
+    processedStreamRef.current = null;
     analyserRef.current = null;
+    muteTracksRef.current = [];
     processedSigIds.current.clear();
     sigIndexRef.current = BigInt(0);
     setBarHeights(Array(BAR_COUNT).fill(4));
     setMicPermission("pending");
     setRtcStatus("idle");
+    setTranslatedText("");
   };
 
-  // Handle mute — disconnect/reconnect microphone source
-  useEffect(() => {
-    const source = sourceRef.current;
-    const dest = gainDestRef.current;
-    if (!source || !dest) return;
-    if (isMuted) {
-      try {
-        source.disconnect();
-      } catch {
-        /* ignore */
-      }
-    } else {
-      try {
-        source.connect(dest);
-      } catch {
-        /* ignore */
-      }
+  // Accept incoming call
+  const handleAccept = async () => {
+    stopRingTone();
+    setCallPhase("active");
+    await sendSignal("ACCEPTED", {});
+    // Start timer
+    setElapsed(0);
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
+    if (audioCtxRef.current) playConnectTone(audioCtxRef.current);
+    // Send offer from non-initiator side too for bidirectional
+    if (pcRef.current && processedStreamRef.current) {
+      const offer = await pcRef.current.createOffer();
+      await pcRef.current.setLocalDescription(offer);
+      await sendSignal("OFFER", offer);
     }
-  }, [isMuted]);
+  };
+
+  // Reject incoming call
+  const handleReject = async () => {
+    await sendSignal("REJECTED", {});
+    handleClose();
+  };
+
+  // Simulate AI translation (since no real translation API)
+  const simulateTranslation = (lang: TranslationLang) => {
+    if (lang === "KAPALI") {
+      setTranslatedText("");
+      return;
+    }
+    const samples: Record<string, string[]> = {
+      "TR→EN": [
+        "Hello, I am on my way",
+        "Please wait a moment",
+        "I will arrive in 5 minutes",
+        "Traffic is a bit heavy",
+      ],
+      "TR→DE": [
+        "Hallo, ich bin unterwegs",
+        "Bitte warten Sie einen Moment",
+        "Ich komme in 5 Minuten",
+        "Es gibt etwas Verkehr",
+      ],
+      "TR→FR": [
+        "Bonjour, je suis en route",
+        "Veuillez patienter",
+        "J'arriverai dans 5 minutes",
+        "Il y a un peu de circulation",
+      ],
+      "EN→TR": [
+        "Merhaba, yoldayım",
+        "Lütfen bir dakika bekleyin",
+        "5 dakikada gelirim",
+        "Biraz trafik var",
+      ],
+    };
+    const options = samples[lang] ?? [];
+    const idx = Math.floor(Math.random() * options.length);
+    setTranslatedText(options[idx]);
+  };
 
   // Main open/close effect
-  // biome-ignore lint/correctness/useExhaustiveDependencies: startAudio/stopAudio intentionally omitted
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional
   useEffect(() => {
     if (isOpen) {
       setElapsed(0);
       setIsMuted(false);
       isMutedRef.current = false;
-      timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
+      setCallPhase(isInitiator ? "calling" : "incoming");
       startAudio();
+
+      // Play ring tone while in calling/incoming phase
+      try {
+        const rCtx = new AudioContext();
+        ringCtxRef.current = rCtx;
+        playRingTone(rCtx);
+      } catch (_e) {
+        /* ignore */
+      }
     } else {
-      if (timerRef.current) clearInterval(timerRef.current);
       stopAudio();
     }
     return () => {
@@ -408,20 +545,31 @@ export default function GhostCallOverlay({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
+  // Stop ring tone when call becomes active
+  // biome-ignore lint/correctness/useExhaustiveDependencies: stopRingTone is stable
+  useEffect(() => {
+    if (callPhase === "active") {
+      stopRingTone();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callPhase]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       if (sigPollRef.current) clearInterval(sigPollRef.current);
+      if (timerRef.current) clearInterval(timerRef.current);
       if (pcRef.current) pcRef.current.close();
       if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
       const ctx = audioCtxRef.current;
       if (ctx && ctx.state !== "closed") ctx.close();
+      if (ringCtxRef.current && ringCtxRef.current.state !== "closed")
+        ringCtxRef.current.close();
       if (streamRef.current) {
         for (const track of streamRef.current.getTracks()) track.stop();
       }
     };
-    // run only on unmount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -477,6 +625,184 @@ export default function GhostCallOverlay({
     return null;
   };
 
+  // INCOMING CALL SCREEN
+  if (isOpen && callPhase === "incoming") {
+    return (
+      <AnimatePresence>
+        <motion.div
+          className="fixed inset-0 z-[9999] flex flex-col items-center justify-center"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          style={{ background: "rgba(6,8,18,0.97)" }}
+        >
+          {/* Pulsing ring animation */}
+          <motion.div
+            className="absolute w-48 h-48 rounded-full"
+            animate={{ scale: [1, 1.3, 1], opacity: [0.3, 0.1, 0.3] }}
+            transition={{ duration: 1.5, repeat: Number.POSITIVE_INFINITY }}
+            style={{
+              background:
+                "radial-gradient(circle, rgba(0,255,247,0.3) 0%, transparent 70%)",
+            }}
+          />
+
+          <div className="flex flex-col items-center gap-8 z-10">
+            {/* Ghost avatar */}
+            <motion.div
+              className="w-24 h-24 rounded-full flex items-center justify-center text-5xl"
+              animate={{ scale: [1, 1.05, 1] }}
+              transition={{ duration: 1, repeat: Number.POSITIVE_INFINITY }}
+              style={{
+                background:
+                  "radial-gradient(circle, rgba(168,85,247,0.25) 0%, rgba(0,255,247,0.05) 100%)",
+                border: "2px solid rgba(0,255,247,0.5)",
+                boxShadow: "0 0 40px rgba(0,255,247,0.3)",
+              }}
+            >
+              👻
+            </motion.div>
+
+            <div className="text-center" style={{ fontFamily: "monospace" }}>
+              <div className="text-xs text-[#a7b0c2] uppercase tracking-widest mb-1">
+                Gelen Arama
+              </div>
+              <div className="text-xl font-bold" style={{ color: "#00fff7" }}>
+                {callerIds.find((id) => id !== myId) ?? "GHOST-????"}
+              </div>
+              <motion.div
+                className="text-xs mt-2"
+                animate={{ opacity: [1, 0.4, 1] }}
+                transition={{ duration: 1, repeat: Number.POSITIVE_INFINITY }}
+                style={{ color: "#a7b0c2" }}
+              >
+                📞 GHOST CALL geliyor...
+              </motion.div>
+            </div>
+
+            {/* Accept / Reject */}
+            <div className="flex gap-10">
+              <button
+                type="button"
+                onClick={handleReject}
+                className="w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all active:scale-95"
+                style={{
+                  background: "rgba(239,68,68,0.2)",
+                  border: "2px solid rgba(239,68,68,0.7)",
+                  boxShadow: "0 0 20px rgba(239,68,68,0.3)",
+                }}
+              >
+                📵
+              </button>
+              <button
+                type="button"
+                onClick={handleAccept}
+                className="w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all active:scale-95"
+                style={{
+                  background: "rgba(34,197,94,0.2)",
+                  border: "2px solid rgba(34,197,94,0.7)",
+                  boxShadow: "0 0 20px rgba(34,197,94,0.3)",
+                }}
+              >
+                📞
+              </button>
+            </div>
+
+            <div
+              className="text-xs"
+              style={{
+                color: "rgba(167,176,194,0.5)",
+                fontFamily: "monospace",
+              }}
+            >
+              Reddet
+              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+              Cevapla
+            </div>
+          </div>
+        </motion.div>
+      </AnimatePresence>
+    );
+  }
+
+  // CALLING SCREEN (initiator waiting)
+  if (isOpen && callPhase === "calling") {
+    return (
+      <AnimatePresence>
+        <motion.div
+          className="fixed inset-0 z-[9999] flex flex-col items-center justify-center"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          style={{ background: "rgba(6,8,18,0.97)" }}
+        >
+          <motion.div
+            className="absolute w-48 h-48 rounded-full"
+            animate={{ scale: [1, 1.4, 1], opacity: [0.2, 0.05, 0.2] }}
+            transition={{ duration: 2, repeat: Number.POSITIVE_INFINITY }}
+            style={{
+              background:
+                "radial-gradient(circle, rgba(168,85,247,0.4) 0%, transparent 70%)",
+            }}
+          />
+          <div className="flex flex-col items-center gap-8 z-10">
+            <motion.div
+              className="w-24 h-24 rounded-full flex items-center justify-center text-5xl"
+              animate={{ scale: [1, 1.05, 1] }}
+              transition={{ duration: 1.5, repeat: Number.POSITIVE_INFINITY }}
+              style={{
+                background:
+                  "radial-gradient(circle, rgba(168,85,247,0.25) 0%, rgba(0,255,247,0.05) 100%)",
+                border: "2px solid rgba(168,85,247,0.5)",
+                boxShadow: "0 0 40px rgba(168,85,247,0.3)",
+              }}
+            >
+              👻
+            </motion.div>
+            <div className="text-center" style={{ fontFamily: "monospace" }}>
+              <div
+                className="text-xl font-bold mb-2"
+                style={{ color: "#a855f7" }}
+              >
+                {callerIds.find((id) => id !== myId) ?? "GHOST-????"}
+              </div>
+              <motion.div
+                className="text-sm"
+                animate={{ opacity: [1, 0.4, 1] }}
+                transition={{ duration: 1.2, repeat: Number.POSITIVE_INFINITY }}
+                style={{ color: "#a7b0c2" }}
+              >
+                Aranıyor...
+              </motion.div>
+            </div>
+            <button
+              type="button"
+              onClick={handleClose}
+              className="w-16 h-16 rounded-full flex items-center justify-center text-2xl"
+              style={{
+                background: "rgba(239,68,68,0.2)",
+                border: "2px solid rgba(239,68,68,0.7)",
+                boxShadow: "0 0 20px rgba(239,68,68,0.3)",
+              }}
+            >
+              📵
+            </button>
+            <div
+              className="text-xs"
+              style={{
+                color: "rgba(167,176,194,0.5)",
+                fontFamily: "monospace",
+              }}
+            >
+              İptal
+            </div>
+          </div>
+        </motion.div>
+      </AnimatePresence>
+    );
+  }
+
+  // ACTIVE CALL SCREEN
   return (
     <AnimatePresence>
       {isOpen && (
@@ -515,7 +841,7 @@ export default function GhostCallOverlay({
             />
           </div>
 
-          <div className="relative z-10 flex flex-col items-center gap-6 w-full max-w-sm px-6">
+          <div className="relative z-10 flex flex-col items-center gap-5 w-full max-w-sm px-6">
             {/* Status badge */}
             <motion.div
               initial={{ y: -10, opacity: 0 }}
@@ -536,13 +862,12 @@ export default function GhostCallOverlay({
               data-ocid="ghost_call.loading_state"
             >
               {micPermission === "denied"
-                ? "🔇 SESİ AÇMAK İÇİN MİKROFON GEREKİYOR"
+                ? "🔇 MİKROFON GEREKİYOR"
                 : micPermission === "granted"
-                  ? "🎤 MİKROFON AKTİF • AI MASKELEME AÇIK"
+                  ? "🎤 AI MASKELEME AKTİF"
                   : "⏳ MİKROFON BAĞLANIYOR..."}
             </motion.div>
 
-            {/* Mic denied warning */}
             {micPermission === "denied" && (
               <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
@@ -564,7 +889,7 @@ export default function GhostCallOverlay({
               </motion.div>
             )}
 
-            {/* Call type */}
+            {/* Caller info */}
             <div className="text-center" style={{ fontFamily: "monospace" }}>
               {isGroup ? (
                 <div
@@ -588,7 +913,6 @@ export default function GhostCallOverlay({
               )}
             </div>
 
-            {/* RTC Status */}
             {rtcStatusLabel() && (
               <div className="flex items-center gap-2">{rtcStatusLabel()}</div>
             )}
@@ -609,7 +933,7 @@ export default function GhostCallOverlay({
               👻
             </div>
 
-            {/* Real-time waveform */}
+            {/* Waveform */}
             <div className="flex items-end justify-center gap-0.5 h-12 w-48">
               {barHeights.map((h, i) => (
                 <div
@@ -661,6 +985,58 @@ export default function GhostCallOverlay({
                   {style}
                 </button>
               ))}
+            </div>
+
+            {/* AI Translation */}
+            <div className="w-full">
+              <div
+                className="text-[10px] text-center mb-1"
+                style={{ color: "#a7b0c2", fontFamily: "monospace" }}
+              >
+                🌐 AI ÇEVİRİ
+              </div>
+              <div className="flex gap-1 justify-center flex-wrap">
+                {TRANSLATION_LANGS.map((lang) => (
+                  <button
+                    key={lang}
+                    type="button"
+                    onClick={() => {
+                      setTranslation(lang);
+                      simulateTranslation(lang);
+                    }}
+                    className="text-[9px] font-bold px-2 py-1 rounded-full uppercase tracking-wider transition-all"
+                    style={{
+                      background:
+                        translation === lang
+                          ? "rgba(34,197,94,0.25)"
+                          : "rgba(255,255,255,0.04)",
+                      border:
+                        translation === lang
+                          ? "1px solid rgba(34,197,94,0.6)"
+                          : "1px solid rgba(255,255,255,0.1)",
+                      color: translation === lang ? "#22c55e" : "#a7b0c2",
+                      fontFamily: "monospace",
+                    }}
+                  >
+                    {lang}
+                  </button>
+                ))}
+              </div>
+              {translatedText && (
+                <motion.div
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mt-2 text-xs text-center px-3 py-2 rounded-lg"
+                  style={{
+                    background: "rgba(34,197,94,0.08)",
+                    border: "1px solid rgba(34,197,94,0.25)",
+                    color: "#22c55e",
+                    fontFamily: "monospace",
+                  }}
+                >
+                  🌐 {translatedText}
+                </motion.div>
+              )}
             </div>
 
             {/* Info */}

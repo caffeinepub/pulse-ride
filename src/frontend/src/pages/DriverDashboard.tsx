@@ -151,6 +151,9 @@ export default function DriverDashboard({
   const [showRating, setShowRating] = useState(false);
   const [ratingStars, setRatingStars] = useState(5);
   const [sessionTerminated, setSessionTerminated] = useState(false);
+  const [backendSessionId, setBackendSessionId] = useState<string>(
+    session.sessionId,
+  );
   const [deliveryRequests, setDeliveryRequests] = useState<DeliveryRequest[]>(
     () => generateDeliveryRequests(),
   );
@@ -169,6 +172,19 @@ export default function DriverDashboard({
       })
       .catch(() => {});
   }, [actor, session.sessionId]);
+
+  // Create a real backend session for driver
+  useEffect(() => {
+    if (!actor) return;
+    actor
+      .createSession("driver")
+      .then((sid) => {
+        setBackendSessionId(sid);
+      })
+      .catch(() => {
+        // fallback: keep session.sessionId — will fail on backend but graceful
+      });
+  }, [actor]);
 
   useEffect(() => {
     timerRef.current = setInterval(() => setTimer((t) => t + 1), 1000);
@@ -250,7 +266,17 @@ export default function DriverDashboard({
     async (ride: AvailableRide) => {
       if (!actor) return;
       try {
-        await actor.acceptRide(ride.rideId, session.sessionId);
+        let sid = backendSessionId;
+        // If still using local ghost ID, create a real backend session first
+        if (sid.startsWith("GHOST-")) {
+          try {
+            sid = await actor.createSession("driver");
+            setBackendSessionId(sid);
+          } catch {
+            // proceed with existing sid
+          }
+        }
+        await actor.acceptRide(ride.rideId, sid);
         setActiveRide(ride);
         if (pollRef.current) clearInterval(pollRef.current);
         toast.success("Yolculuk kabul edildi — AI navigasyonu aktif");
@@ -258,7 +284,7 @@ export default function DriverDashboard({
         toast.error("Yolculuk kabul edilemedi");
       }
     },
-    [actor, session.sessionId],
+    [actor, backendSessionId],
   );
 
   const handleCompleteRide = useCallback(async () => {
@@ -266,21 +292,21 @@ export default function DriverDashboard({
     try {
       await actor.updateRideStatus(
         activeRide.rideId,
-        session.sessionId,
+        backendSessionId,
         "completed",
       );
       setShowRating(true);
     } catch {
       toast.error("Yolculuk tamamlanamadı");
     }
-  }, [actor, activeRide, session.sessionId]);
+  }, [actor, activeRide, backendSessionId]);
 
   const handleSubmitRating = useCallback(async () => {
     if (!actor || !activeRide) return;
     try {
       await actor.submitRating(
         activeRide.rideId,
-        session.sessionId,
+        backendSessionId,
         BigInt(ratingStars),
       );
       toast.success("Değerlendirme gönderildi");
@@ -291,16 +317,16 @@ export default function DriverDashboard({
     } catch {
       toast.error("Değerlendirme gönderilemedi");
     }
-  }, [actor, activeRide, ratingStars, session.sessionId]);
+  }, [actor, activeRide, ratingStars, backendSessionId]);
 
   const handleEndSession = useCallback(async () => {
     if (!actor) return;
     try {
-      await actor.endSession(session.sessionId);
+      await actor.endSession(backendSessionId);
     } catch {}
     setSessionTerminated(true);
     setTimeout(onEndSession, 2500);
-  }, [actor, session.sessionId, onEndSession]);
+  }, [actor, backendSessionId, onEndSession]);
 
   if (sessionTerminated) {
     return (
