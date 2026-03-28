@@ -13,6 +13,11 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useActor } from "@/hooks/useActor";
 import {
+  type Currency,
+  calcRidePrice,
+  detectCurrencyFromAddress,
+} from "@/utils/pricingUtils";
+import {
   Ghost,
   Lock,
   LogOut,
@@ -59,6 +64,7 @@ interface NominatimResult {
   display_name: string;
   lat: string;
   lon: string;
+  address?: { country_code?: string };
 }
 
 const MOODS = [
@@ -91,35 +97,10 @@ function formatTime(seconds: number): string {
   return `${m}:${s}`;
 }
 
-function calcAiPrice(
-  dropoff: string,
-  coords?: { lat: number; lng: number } | null,
-): AiPriceData {
-  let distance: number;
-  if (coords) {
-    const centerLat = 41.0082;
-    const centerLng = 28.9784;
-    const dlat = coords.lat - centerLat;
-    const dlng = coords.lng - centerLng;
-    const rawDist = Math.sqrt(dlat * dlat + dlng * dlng) * 111;
-    const entropy = (dropoff.length * 1.7) % 18;
-    distance = Math.max(2, Math.min(30, rawDist + entropy + 3));
-    distance = Math.round(distance * 10) / 10;
-  } else {
-    distance = ((dropoff.length * 2) % 30) + 2;
-  }
-  const duration = Math.round(distance * 3);
-  const trafficIndex = Math.round(distance) % 3;
-  const trafficLevel =
-    trafficIndex === 0 ? "Low" : trafficIndex === 1 ? "Moderate" : "High";
-  const trafficBonus =
-    trafficLevel === "High" ? 450 : trafficLevel === "Moderate" ? 250 : 0;
-  const rawPrice = 1000 + distance * 120 + duration * 3 + trafficBonus;
-  const price = Math.min(2800, Math.max(800, Math.round(rawPrice)));
-  return { price, distanceKm: distance, durationMin: duration, trafficLevel };
-}
-
-function AnimatedPrice({ target }: { target: number }) {
+function AnimatedPrice({
+  target,
+  symbol = "₺",
+}: { target: number; symbol?: string }) {
   const count = useMotionValue(0);
   const rounded = useTransform(count, (v) => Math.round(v));
   const [display, setDisplay] = useState(0);
@@ -133,7 +114,12 @@ function AnimatedPrice({ target }: { target: number }) {
     };
   }, [target, count, rounded]);
 
-  return <span>₺{display}</span>;
+  return (
+    <span>
+      {symbol}
+      {display}
+    </span>
+  );
 }
 
 const trafficColor = (level: string) =>
@@ -158,6 +144,7 @@ export default function RiderDashboard({
     lat: number;
     lng: number;
   } | null>(null);
+  const [dropoffCurrency, setDropoffCurrency] = useState<Currency>("TRY");
   const [searchResults, setSearchResults] = useState<NominatimResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -179,6 +166,10 @@ export default function RiderDashboard({
   const phantomRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [searchTimer, setSearchTimer] = useState(0);
+  const searchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const geoWatchRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -186,30 +177,52 @@ export default function RiderDashboard({
       setDetectedLocation({
         lat: 41.0082,
         lng: 28.9784,
-        label: "ISTANBUL-41.0082°N",
+        label: "İstanbul, Türkiye",
       });
       return;
     }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude: lat, longitude: lng } = pos.coords;
+    const reverseGeocode = async (lat: number, lng: number) => {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+          { headers: { "User-Agent": "PulseRide/1.0" } },
+        );
+        const data = await res.json();
+        const label = data.display_name
+          ? data.display_name.split(",").slice(0, 3).join(", ")
+          : `${lat.toFixed(4)}°N ${lng.toFixed(4)}°E`;
+        setDetectedLocation({ lat, lng, label });
+        setLocationStatus("found");
+      } catch {
         setDetectedLocation({
           lat,
           lng,
           label: `${lat.toFixed(4)}°N ${lng.toFixed(4)}°E`,
         });
         setLocationStatus("found");
+      }
+    };
+    geoWatchRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        const { latitude: lat, longitude: lng } = pos.coords;
+        reverseGeocode(lat, lng);
       },
       () => {
         setLocationStatus("denied");
         setDetectedLocation({
           lat: 41.0082,
           lng: 28.9784,
-          label: "ISTANBUL-41.0082°N",
+          label: "İstanbul, Türkiye",
         });
       },
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 },
     );
+    return () => {
+      if (geoWatchRef.current !== null) {
+        navigator.geolocation.clearWatch(geoWatchRef.current);
+        geoWatchRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -240,6 +253,58 @@ export default function RiderDashboard({
     };
   }, [phantomMode, rideId]);
 
+  // Poll backend to detect when driver accepts the ride
+  useEffect(() => {
+    if (rideStatus !== "searching" || !actor || !rideId) {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+      return;
+    }
+    pollingRef.current = setInterval(async () => {
+      try {
+        const [status] = await actor.getRideStatus(rideId);
+        if (status === "matched" || status === "active") {
+          setRideStatus("active");
+          toast.success("🚗 Sürücü bulundu! Yolculuk başlıyor...");
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+        }
+      } catch {}
+    }, 3000);
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [rideStatus, actor, rideId]);
+
+  // Search timer — counts up while searching for driver
+  useEffect(() => {
+    if (rideStatus === "searching") {
+      setSearchTimer(0);
+      searchTimerRef.current = setInterval(
+        () => setSearchTimer((t) => t + 1),
+        1000,
+      );
+    } else {
+      if (searchTimerRef.current) {
+        clearInterval(searchTimerRef.current);
+        searchTimerRef.current = null;
+      }
+    }
+    return () => {
+      if (searchTimerRef.current) {
+        clearInterval(searchTimerRef.current);
+        searchTimerRef.current = null;
+      }
+    };
+  }, [rideStatus]);
+
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (
@@ -266,7 +331,7 @@ export default function RiderDashboard({
       setIsSearching(true);
       try {
         const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(value)}&format=json&limit=5&countrycodes=tr&accept-language=tr`,
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(value)}&format=json&limit=5&addressdetails=1&accept-language=tr,en`,
           { headers: { "User-Agent": "PulseRide/1.0" } },
         );
         const data: NominatimResult[] = await res.json();
@@ -281,15 +346,71 @@ export default function RiderDashboard({
     }, 400);
   }, []);
 
-  const handleSelectResult = useCallback((result: NominatimResult) => {
-    setDropoffZone(result.display_name);
-    setDropoffCoords({
-      lat: Number.parseFloat(result.lat),
-      lng: Number.parseFloat(result.lon),
-    });
-    setShowDropdown(false);
-    setSearchResults([]);
-  }, []);
+  const handleSelectResult = useCallback(
+    async (result: NominatimResult) => {
+      const lat = Number.parseFloat(result.lat);
+      const lng = Number.parseFloat(result.lon);
+      const cc = result.address?.country_code;
+      const currency = detectCurrencyFromAddress(result.display_name, cc);
+      setDropoffZone(result.display_name);
+      setDropoffCoords({ lat, lng });
+      setDropoffCurrency(currency);
+      setShowDropdown(false);
+      setSearchResults([]);
+      // Auto-trigger search immediately after address selection
+      if (!actor) return;
+      setLoading(true);
+      const pickupLabel = detectedLocation?.label ?? "İstanbul, Türkiye";
+      try {
+        const [rid, code] = await actor.createRideRequest(
+          session.sessionId,
+          pickupLabel,
+          result.display_name,
+          phantomMode,
+        );
+        const pickupLat = detectedLocation?.lat ?? 41.0082;
+        const pickupLng = detectedLocation?.lng ?? 28.9784;
+        const distKm = Math.max(
+          2,
+          Math.min(
+            40,
+            Math.sqrt(
+              ((lat - pickupLat) * 111) ** 2 +
+                ((lng - pickupLng) * 111 * Math.cos((lat * Math.PI) / 180)) **
+                  2,
+            ),
+          ),
+        );
+        const durMin = Math.round(distKm * 3);
+        const trafficIdx = Math.round(distKm) % 3;
+        const trafficLevel =
+          trafficIdx === 0 ? "Low" : trafficIdx === 1 ? "Moderate" : "High";
+        const pricingResult = calcRidePrice(
+          distKm,
+          durMin,
+          currency,
+          result.display_name,
+        );
+        setAiPriceData({
+          price: pricingResult.price,
+          distanceKm: distKm,
+          durationMin: durMin,
+          trafficLevel,
+        });
+        setRideId(rid);
+        setSessionCode(code);
+        // Immediately approve and go to searching
+        await actor.approveRide(rid, session.sessionId);
+        setRideStatus("searching");
+        toast.success("Sürücü aranıyor — anonim eşleşme aktif...");
+      } catch {
+        toast.error("Yolculuk isteği oluşturulamadı");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [actor, detectedLocation, phantomMode, session.sessionId],
+  );
 
   const handleCalculatePrice = useCallback(async () => {
     if (!actor || !dropoffZone.trim()) return;
@@ -304,7 +425,39 @@ export default function RiderDashboard({
       );
       setRideId(rid);
       setSessionCode(code);
-      const priceData = calcAiPrice(dropoffZone, dropoffCoords);
+      const distKm = dropoffCoords
+        ? Math.max(
+            2,
+            Math.min(
+              40,
+              Math.sqrt(
+                ((dropoffCoords.lat - (detectedLocation?.lat ?? 41.0082)) *
+                  111) **
+                  2 +
+                  ((dropoffCoords.lng - (detectedLocation?.lng ?? 28.9784)) *
+                    111 *
+                    Math.cos((dropoffCoords.lat * Math.PI) / 180)) **
+                    2,
+              ),
+            ),
+          )
+        : ((dropoffZone.length * 2) % 30) + 2;
+      const durMin = Math.round(distKm * 3);
+      const trafficIdx = Math.round(distKm) % 3;
+      const trafficLevel =
+        trafficIdx === 0 ? "Low" : trafficIdx === 1 ? "Moderate" : "High";
+      const pricingResult = calcRidePrice(
+        distKm,
+        durMin,
+        dropoffCurrency,
+        dropoffZone,
+      );
+      const priceData = {
+        price: pricingResult.price,
+        distanceKm: distKm,
+        durationMin: durMin,
+        trafficLevel,
+      };
       setAiPriceData(priceData);
       setRideStatus("pricing");
       toast.success("AI fiyatı hesaplandı — onaylamadan önce inceleyin");
@@ -317,6 +470,7 @@ export default function RiderDashboard({
     actor,
     dropoffZone,
     dropoffCoords,
+    dropoffCurrency,
     phantomMode,
     session.sessionId,
     detectedLocation,
@@ -803,10 +957,15 @@ export default function RiderDashboard({
                   className="text-5xl font-black tracking-tight"
                   style={{ color: "#276EF1" }}
                 >
-                  <AnimatedPrice target={aiPriceData.price} />
+                  <AnimatedPrice
+                    target={aiPriceData.price}
+                    symbol={dropoffCurrency === "EUR" ? "€" : "₺"}
+                  />
                 </motion.div>
                 <p className="text-xs text-gray-500 mt-1">
-                  Türk Lirası · Varışta nakit ödeme
+                  {dropoffCurrency === "EUR"
+                    ? "Euro · Piyasanın %20 altında tavsiye fiyat"
+                    : "Türk Lirası · Varışta nakit ödeme"}
                 </p>
               </div>
 
@@ -847,24 +1006,96 @@ export default function RiderDashboard({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
               className="uber-card rounded-xl p-5"
-              style={{ borderColor: "rgba(39,110,241,0.3)" }}
+              style={{
+                borderColor:
+                  rideStatus === "active"
+                    ? "rgba(5,148,79,0.4)"
+                    : "rgba(39,110,241,0.3)",
+              }}
             >
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-sm font-bold text-[#141414] uppercase tracking-wide">
                   YOLCULUK DURUMU
                 </h2>
-                <div className="flex items-center gap-2">
-                  <div className="relative">
-                    <div className="w-2.5 h-2.5 rounded-full bg-[#276EF1]" />
-                    <div className="absolute inset-0 rounded-full animate-ping bg-[#276EF1] opacity-40" />
+                {rideStatus === "searching" ? (
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <div className="w-2.5 h-2.5 rounded-full bg-[#276EF1]" />
+                      <div className="absolute inset-0 rounded-full animate-ping bg-[#276EF1] opacity-40" />
+                    </div>
+                    <span className="text-xs font-semibold text-[#276EF1]">
+                      SÜRÜCÜ ARANIYOR...
+                    </span>
                   </div>
-                  <span className="text-xs font-semibold text-[#276EF1]">
-                    SÜRÜCÜ ARANIYOR...
-                  </span>
-                </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <div className="w-2.5 h-2.5 rounded-full bg-[#05944F]" />
+                      <div className="absolute inset-0 rounded-full animate-ping bg-[#05944F] opacity-40" />
+                    </div>
+                    <span className="text-xs font-semibold text-[#05944F]">
+                      ✓ SÜRÜCÜ BULUNDU
+                    </span>
+                  </div>
+                )}
               </div>
 
-              {sessionCode && (
+              {/* Search timer + price info */}
+              {rideStatus === "searching" && (
+                <div className="mb-4 space-y-3">
+                  <div
+                    className="rounded-xl p-4 text-center"
+                    style={{
+                      background: "rgba(39,110,241,0.05)",
+                      border: "1px solid rgba(39,110,241,0.2)",
+                    }}
+                  >
+                    <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-1">
+                      ARAMA SÜRESİ
+                    </p>
+                    <p
+                      className="text-3xl font-black font-mono"
+                      style={{ color: "#276EF1" }}
+                    >
+                      {formatTime(searchTimer)}
+                    </p>
+                  </div>
+                  {aiPriceData && (
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="text-center p-2.5 rounded-xl bg-gray-50 border border-gray-100">
+                        <p className="text-[9px] text-gray-400 uppercase mb-1">
+                          HEDEF
+                        </p>
+                        <p className="text-[10px] font-bold text-[#141414] truncate">
+                          {dropoffZone.split(",")[0]}
+                        </p>
+                      </div>
+                      <div className="text-center p-2.5 rounded-xl bg-gray-50 border border-gray-100">
+                        <p className="text-[9px] text-gray-400 uppercase mb-1">
+                          MESAFE
+                        </p>
+                        <p className="text-sm font-black text-[#141414]">
+                          {Math.round(aiPriceData.distanceKm)} km
+                        </p>
+                      </div>
+                      <div className="text-center p-2.5 rounded-xl bg-gray-50 border border-gray-100">
+                        <p className="text-[9px] text-gray-400 uppercase mb-1">
+                          ÜCRET
+                        </p>
+                        <p
+                          className="text-sm font-black"
+                          style={{ color: "#276EF1" }}
+                        >
+                          {dropoffCurrency === "EUR" ? "€" : "₺"}
+                          {aiPriceData.price}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {sessionCode && rideStatus === "active" && (
                 <div className="grid grid-cols-2 gap-3 mb-4">
                   <div className="text-center p-3 rounded-xl bg-gray-50 border border-gray-100">
                     <p className="text-xs text-gray-500 mb-1">YOLCULUK ID</p>
@@ -877,10 +1108,35 @@ export default function RiderDashboard({
                       ANLAŞILAN ÜCRET
                     </p>
                     <p className="text-sm font-bold text-[#05944F]">
-                      {aiPriceData ? `₺${aiPriceData.price}` : sessionCode}
+                      {aiPriceData
+                        ? `${dropoffCurrency === "EUR" ? "€" : "₺"}${aiPriceData.price}`
+                        : sessionCode}
                     </p>
                   </div>
                 </div>
+              )}
+
+              {rideStatus === "active" && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mb-4 rounded-xl p-3 flex items-center gap-3"
+                  style={{
+                    background: "rgba(5,148,79,0.1)",
+                    border: "1px solid rgba(5,148,79,0.3)",
+                  }}
+                >
+                  <span className="text-xl">🚗</span>
+                  <div>
+                    <p className="text-xs font-black text-[#05944F] uppercase tracking-wide">
+                      Sürücünüz eşleşti!
+                    </p>
+                    <p className="text-[10px] text-gray-500">
+                      Yolcu alınmayı bekliyor — GHOST CHAT ile iletişime
+                      geçebilirsiniz
+                    </p>
+                  </div>
+                </motion.div>
               )}
 
               <div className="space-y-2">
@@ -983,7 +1239,8 @@ export default function RiderDashboard({
                     className="text-4xl font-black"
                     style={{ color: "#05944F" }}
                   >
-                    ₺{aiPriceData.price}
+                    {dropoffCurrency === "EUR" ? "€" : "₺"}
+                    {aiPriceData.price}
                   </p>
                 </div>
               )}

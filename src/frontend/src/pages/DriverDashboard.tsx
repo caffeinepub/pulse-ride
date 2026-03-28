@@ -10,7 +10,16 @@ import {
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { useActor } from "@/hooks/useActor";
-import { Ghost, Lock, LogOut, Navigation, Star, Zap } from "lucide-react";
+import {
+  Ghost,
+  Lock,
+  LogOut,
+  Navigation,
+  Package,
+  Star,
+  Truck,
+  Zap,
+} from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -30,6 +39,34 @@ interface AvailableRide {
   distanceKm: number;
   durationMin: number;
   trafficLevel: string;
+}
+
+interface DeliveryRequest {
+  id: string;
+  packageSize: "S" | "M" | "XL";
+  distance: number;
+  price: number;
+  express: boolean;
+  eta: number;
+}
+
+function generateDeliveryRequests(): DeliveryRequest[] {
+  const sizes: ("S" | "M" | "XL")[] = ["S", "M", "XL"];
+  return [0, 1, 2].map((i) => {
+    const size = sizes[i % 3];
+    const dist = Math.floor(Math.random() * 13) + 2;
+    const base = size === "S" ? 30 : size === "M" ? 45 : 65;
+    const price = base + dist * 2;
+    const express = Math.random() > 0.6;
+    return {
+      id: `GHOST-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+      packageSize: size,
+      distance: dist,
+      price: express ? Math.round(price * 1.8) : price,
+      express,
+      eta: Math.floor(Math.random() * 30) + 10,
+    };
+  });
 }
 
 const NAV_STEPS = [
@@ -114,6 +151,9 @@ export default function DriverDashboard({
   const [showRating, setShowRating] = useState(false);
   const [ratingStars, setRatingStars] = useState(5);
   const [sessionTerminated, setSessionTerminated] = useState(false);
+  const [deliveryRequests, setDeliveryRequests] = useState<DeliveryRequest[]>(
+    () => generateDeliveryRequests(),
+  );
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const eventRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -170,7 +210,7 @@ export default function DriverDashboard({
         .catch(() => {});
     };
     poll();
-    pollRef.current = setInterval(poll, 5000);
+    pollRef.current = setInterval(poll, 3000);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
@@ -346,118 +386,286 @@ export default function DriverDashboard({
 
         {/* Available Rides or In-Ride */}
         {!activeRide ? (
-          <div className="uber-card rounded-xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="text-sm font-bold text-[#141414] uppercase tracking-wide">
-                MEVCUT YOLCULUKLAR
-              </h2>
-              <div
-                className="flex items-center gap-1.5 text-xs"
-                style={{ color: "#276EF1" }}
-              >
-                <div className="w-1.5 h-1.5 rounded-full animate-pulse bg-[#276EF1]" />
-                Canlı
-              </div>
-            </div>
-            <div className="p-4 space-y-3">
-              {rides.length === 0 ? (
+          <>
+            <div className="uber-card rounded-xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                <h2 className="text-sm font-bold text-[#141414] uppercase tracking-wide">
+                  MEVCUT YOLCULUKLAR
+                </h2>
                 <div
-                  className="text-center py-10 text-gray-400 text-sm"
-                  data-ocid="driver.rides.empty_state"
+                  className="flex items-center gap-1.5 text-xs"
+                  style={{ color: "#276EF1" }}
                 >
-                  <Navigation className="w-8 h-8 mx-auto mb-3 opacity-30" />
-                  Yolculuk talepleri taranıyor...
+                  <div className="w-1.5 h-1.5 rounded-full animate-pulse bg-[#276EF1]" />
+                  Canlı
                 </div>
-              ) : (
-                rides.map((ride, index) => (
-                  <motion.div
-                    key={ride.rideId}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="p-4 rounded-xl"
-                    style={{
-                      background: ride.isPhantom
-                        ? "rgba(124,58,237,0.05)"
-                        : "#FAFAFA",
-                      border: `1px solid ${ride.isPhantom ? "rgba(124,58,237,0.25)" : "#E5E7EB"}`,
-                    }}
-                    data-ocid={`driver.ride.item.${index + 1}`}
+              </div>
+              <div className="p-4 space-y-3">
+                {rides.length === 0 ? (
+                  <div
+                    className="text-center py-10"
+                    data-ocid="driver.rides.empty_state"
                   >
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-3">
-                        {ride.isPhantom && (
-                          <Ghost
-                            className="w-5 h-5"
-                            style={{ color: "#7C3AED" }}
-                          />
-                        )}
-                        <div>
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-xs font-mono font-bold text-[#141414]">
-                              {ride.sessionCode}
-                            </span>
-                            {ride.isPhantom && (
+                    <div className="relative inline-flex mb-4">
+                      <div
+                        className="w-12 h-12 rounded-full flex items-center justify-center"
+                        style={{ background: "rgba(39,110,241,0.08)" }}
+                      >
+                        <Navigation
+                          className="w-6 h-6"
+                          style={{ color: "#276EF1" }}
+                        />
+                      </div>
+                      <div
+                        className="absolute inset-0 rounded-full animate-ping"
+                        style={{ background: "rgba(39,110,241,0.15)" }}
+                      />
+                    </div>
+                    <p
+                      className="text-sm font-bold uppercase tracking-widest mb-1"
+                      style={{ color: "#276EF1" }}
+                    >
+                      ARAMA YAPILIYOR...
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      Yolcu talepleri bekleniyor
+                    </p>
+                    <div className="flex justify-center gap-1 mt-3">
+                      {[0, 1, 2].map((i) => (
+                        <div
+                          key={i}
+                          className="w-1.5 h-1.5 rounded-full bg-[#276EF1]"
+                          style={{
+                            animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite`,
+                            opacity: 0.6,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  rides.map((ride, index) => (
+                    <motion.div
+                      key={ride.rideId}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="p-4 rounded-xl"
+                      style={{
+                        background: ride.isPhantom
+                          ? "rgba(124,58,237,0.05)"
+                          : "#FAFAFA",
+                        border: `1px solid ${ride.isPhantom ? "rgba(124,58,237,0.25)" : "#E5E7EB"}`,
+                      }}
+                      data-ocid={`driver.ride.item.${index + 1}`}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-3">
+                          {ride.isPhantom && (
+                            <Ghost
+                              className="w-5 h-5"
+                              style={{ color: "#7C3AED" }}
+                            />
+                          )}
+                          <div>
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-xs font-mono font-bold text-[#141414]">
+                                {ride.sessionCode}
+                              </span>
+                              {ride.isPhantom && (
+                                <span
+                                  className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase"
+                                  style={{
+                                    background: "rgba(124,58,237,0.1)",
+                                    color: "#7C3AED",
+                                    border: "1px solid rgba(124,58,237,0.2)",
+                                  }}
+                                >
+                                  PHANTOM
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <p className="text-[10px] text-gray-500">
+                                Güven:{" "}
+                                <span style={{ color: "#276EF1" }}>
+                                  {ride.riderTrust || "Bilinmiyor"}
+                                </span>
+                              </p>
+                              <p className="text-[10px] text-gray-400">
+                                {ride.distanceKm} km · {ride.durationMin} dk
+                              </p>
                               <span
-                                className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase"
+                                className="text-[10px] px-1.5 py-0.5 rounded-full font-bold uppercase"
                                 style={{
-                                  background: "rgba(124,58,237,0.1)",
-                                  color: "#7C3AED",
-                                  border: "1px solid rgba(124,58,237,0.2)",
+                                  background: `${trafficColor(ride.trafficLevel)}12`,
+                                  color: trafficColor(ride.trafficLevel),
+                                  border: `1px solid ${trafficColor(ride.trafficLevel)}25`,
                                 }}
                               >
-                                PHANTOM
+                                {ride.trafficLevel}
                               </span>
-                            )}
+                            </div>
                           </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="text-right">
+                            <p
+                              className="text-xl font-black"
+                              style={{ color: "#276EF1" }}
+                            >
+                              ₺{ride.aiPrice}
+                            </p>
+                            <p className="text-[10px] text-gray-400">nakit</p>
+                          </div>
+                          <Button
+                            onClick={() => handleAcceptRide(ride)}
+                            size="sm"
+                            className="text-xs font-bold tracking-wide uppercase rounded-xl px-4 text-white"
+                            style={{ background: "#276EF1" }}
+                            data-ocid={`driver.accept_ride.button.${index + 1}`}
+                          >
+                            KABUL ET
+                          </Button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Delivery requests section */}
+            <div className="uber-card rounded-xl overflow-hidden mt-4">
+              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                <h2 className="text-sm font-bold text-[#141414] uppercase tracking-wide flex items-center gap-2">
+                  <Package className="w-4 h-4" style={{ color: "#276EF1" }} />
+                  TESLİMAT TALEPLERİ
+                </h2>
+                <div
+                  className="flex items-center gap-1.5 text-xs"
+                  style={{ color: "#276EF1" }}
+                >
+                  <div className="w-1.5 h-1.5 rounded-full animate-pulse bg-[#276EF1]" />
+                  Canlı
+                </div>
+              </div>
+              <div className="p-4 space-y-3">
+                {deliveryRequests.length === 0 ? (
+                  <div
+                    className="text-center py-10 text-gray-400 text-sm"
+                    data-ocid="driver.deliveries.empty_state"
+                  >
+                    <Truck className="w-8 h-8 mx-auto mb-3 opacity-30" />
+                    Teslimat talebi bekleniyor...
+                  </div>
+                ) : (
+                  deliveryRequests.map((req, index) => {
+                    const sizeColor =
+                      req.packageSize === "S"
+                        ? "#276EF1"
+                        : req.packageSize === "M"
+                          ? "#F59E0B"
+                          : "#8B5CF6";
+                    return (
+                      <motion.div
+                        key={req.id}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="p-4 rounded-xl"
+                        style={{
+                          background: req.express
+                            ? "rgba(245,158,11,0.04)"
+                            : "#FAFAFA",
+                          border: `1px solid ${req.express ? "rgba(245,158,11,0.2)" : "#E5E7EB"}`,
+                        }}
+                        data-ocid={`driver.delivery.item.${index + 1}`}
+                      >
+                        <div className="flex items-start justify-between">
                           <div className="flex items-center gap-3">
-                            <p className="text-[10px] text-gray-500">
-                              Güven:{" "}
-                              <span style={{ color: "#276EF1" }}>
-                                {ride.riderTrust || "Bilinmiyor"}
-                              </span>
-                            </p>
-                            <p className="text-[10px] text-gray-400">
-                              {ride.distanceKm} km · {ride.durationMin} dk
-                            </p>
-                            <span
-                              className="text-[10px] px-1.5 py-0.5 rounded-full font-bold uppercase"
+                            <div
+                              className="w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm flex-shrink-0"
                               style={{
-                                background: `${trafficColor(ride.trafficLevel)}12`,
-                                color: trafficColor(ride.trafficLevel),
-                                border: `1px solid ${trafficColor(ride.trafficLevel)}25`,
+                                background: `${sizeColor}18`,
+                                color: sizeColor,
                               }}
                             >
-                              {ride.trafficLevel}
-                            </span>
+                              {req.packageSize}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-xs font-mono font-bold text-[#141414]">
+                                  {req.id}
+                                </span>
+                                {req.express && (
+                                  <span
+                                    className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase"
+                                    style={{
+                                      background: "rgba(245,158,11,0.12)",
+                                      color: "#F59E0B",
+                                      border: "1px solid rgba(245,158,11,0.25)",
+                                    }}
+                                  >
+                                    ⚡ EXPRESS
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <p className="text-[10px] text-gray-500">
+                                  {req.distance} km ·{" "}
+                                  <span style={{ color: "#276EF1" }}>
+                                    ~{req.eta} dk
+                                  </span>
+                                </p>
+                                <span
+                                  className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold"
+                                  style={{
+                                    background: `${sizeColor}12`,
+                                    color: sizeColor,
+                                    border: `1px solid ${sizeColor}25`,
+                                  }}
+                                >
+                                  {req.packageSize === "S"
+                                    ? "< 2 kg"
+                                    : req.packageSize === "M"
+                                      ? "2–10 kg"
+                                      : "> 10 kg"}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <div className="text-right">
+                              <p
+                                className="text-xl font-black"
+                                style={{ color: "#276EF1" }}
+                              >
+                                ₺{req.price}
+                              </p>
+                              <p className="text-[10px] text-gray-400">nakit</p>
+                            </div>
+                            <Button
+                              onClick={() => {
+                                setDeliveryRequests((prev) =>
+                                  prev.filter((r) => r.id !== req.id),
+                                );
+                                toast.success("📦 Teslimat kabul edildi!");
+                              }}
+                              size="sm"
+                              className="text-xs font-bold tracking-wide uppercase rounded-xl px-4 text-white"
+                              style={{ background: "#276EF1" }}
+                              data-ocid={`driver.accept_delivery.button.${index + 1}`}
+                            >
+                              KABUL ET
+                            </Button>
                           </div>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="text-right">
-                          <p
-                            className="text-xl font-black"
-                            style={{ color: "#276EF1" }}
-                          >
-                            ₺{ride.aiPrice}
-                          </p>
-                          <p className="text-[10px] text-gray-400">nakit</p>
-                        </div>
-                        <Button
-                          onClick={() => handleAcceptRide(ride)}
-                          size="sm"
-                          className="text-xs font-bold tracking-wide uppercase rounded-xl px-4 text-white"
-                          style={{ background: "#276EF1" }}
-                          data-ocid={`driver.accept_ride.button.${index + 1}`}
-                        >
-                          KABUL ET
-                        </Button>
-                      </div>
-                    </div>
-                  </motion.div>
-                ))
-              )}
+                      </motion.div>
+                    );
+                  })
+                )}
+              </div>
             </div>
-          </div>
+          </>
         ) : (
           /* In-Ride View */
           <>

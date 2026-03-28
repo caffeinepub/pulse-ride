@@ -128,6 +128,7 @@ export interface backendInterface {
     sendGroupMessage(groupCode: string, sessionId: string, message: string): Promise<boolean>;
     sendMessage(rideId: string, senderSessionId: string, encryptedText: string): Promise<boolean>;
     submitRating(rideId: string, raterSessionId: string, stars: bigint): Promise<boolean>;
+    getRideStatus(rideId: string): Promise<[string, string]>;
     updateRideStatus(rideId: string, sessionId: string, newStatus: string): Promise<boolean>;
 }
 import type { UserProfile as _UserProfile, UserRole as _UserRole } from "./declarations/backend.did.d.ts";
@@ -562,6 +563,20 @@ export class Backend implements backendInterface {
             }
         } else {
             const result = await this.actor.submitRating(arg0, arg1, arg2);
+            return result;
+        }
+    }
+    async getRideStatus(arg0: string): Promise<[string, string]> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.getRideStatus(arg0);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.getRideStatus(arg0);
             return result;
         }
     }

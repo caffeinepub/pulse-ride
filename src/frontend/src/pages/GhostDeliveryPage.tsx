@@ -1,5 +1,10 @@
 import { Switch } from "@/components/ui/switch";
 import {
+  type Currency,
+  calcDeliveryPrice,
+  detectCurrencyFromAddress,
+} from "@/utils/pricingUtils";
+import {
   ArrowLeft,
   CheckCircle,
   ChevronRight,
@@ -20,6 +25,7 @@ interface NominatimResult {
   display_name: string;
   lat: string;
   lon: string;
+  address?: { country_code?: string };
 }
 
 function generateGhostId(): string {
@@ -52,7 +58,12 @@ interface AddressInputProps {
   placeholder: string;
   value: string;
   onChange: (v: string) => void;
-  onSelect: (display: string, lat: number, lng: number) => void;
+  onSelect: (
+    display: string,
+    lat: number,
+    lng: number,
+    countryCode?: string,
+  ) => void;
   isDark: boolean;
 }
 
@@ -79,7 +90,7 @@ function AddressInput({
       setLoading(true);
       try {
         const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(v)}&format=json&limit=5&accept-language=tr,en&countrycodes=tr,de,fr,nl,gb,be`,
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(v)}&format=json&limit=5&addressdetails=1&accept-language=tr,en`,
         );
         const data: NominatimResult[] = await res.json();
         setSuggestions(data);
@@ -134,6 +145,7 @@ function AddressInput({
                   s.display_name,
                   Number.parseFloat(s.lat),
                   Number.parseFloat(s.lon),
+                  s.address?.country_code,
                 );
                 setSuggestions([]);
               }}
@@ -174,6 +186,7 @@ export default function GhostDeliveryPage({ onBack }: GhostDeliveryPageProps) {
   );
   const [packageType, setPackageType] = useState<PackageType>("small");
   const [expressMode, setExpressMode] = useState(false);
+  const [deliveryCurrency, setDeliveryCurrency] = useState<Currency>("TRY");
   const [courierId] = useState(() => generateGhostId());
   const [deliveryCode] = useState(() => generateCode());
   const [codeInput, setCodeInput] = useState("");
@@ -184,6 +197,8 @@ export default function GhostDeliveryPage({ onBack }: GhostDeliveryPageProps) {
   const [startTime] = useState(() => Date.now());
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
+  const createMapRef = useRef<HTMLDivElement>(null);
+  const createMapInstanceRef = useRef<any>(null);
   const vehicleMarkerRef = useRef<any>(null);
   const animFrameRef = useRef<number | null>(null);
   const animStartRef = useRef<number | null>(null);
@@ -203,8 +218,16 @@ export default function GhostDeliveryPage({ onBack }: GhostDeliveryPageProps) {
       : packageType === "medium"
         ? "#F59E0B"
         : "#10B981";
-  const basePrice = 15 + distance * 2;
-  const finalPrice = expressMode ? basePrice * 1.8 : basePrice;
+  const pricingResult = calcDeliveryPrice(
+    distance,
+    packageType,
+    deliveryCurrency,
+    dropoffText,
+    expressMode,
+  );
+  const basePrice = pricingResult.price / (expressMode ? 1.8 : 1.0);
+  const finalPrice = pricingResult.price;
+  const currencySymbol = pricingResult.symbol;
   const eta = Math.ceil(distance * 3 + 5);
   const tokens = expressMode ? 10 : 5;
   const duration = Math.ceil((Date.now() - startTime) / 60000);
@@ -301,110 +324,152 @@ export default function GhostDeliveryPage({ onBack }: GhostDeliveryPageProps) {
   const textSecondary = isDark ? "#9CA3AF" : "#6B7280";
   const borderColor = isDark ? "#374151" : "#E5E7EB";
 
-  const PACKAGE_TYPES: {
+  const PACKAGE_SIZES: {
     id: PackageType;
-    emoji: string;
+    size: string;
     label: string;
     desc: string;
+    color: string;
+    baseEstimate: number;
   }[] = [
-    { id: "small", emoji: "📦", label: "Küçük", desc: "< 2 kg" },
-    { id: "medium", emoji: "📫", label: "Orta", desc: "2–10 kg" },
-    { id: "sensitive", emoji: "🔒", label: "Hassas", desc: "Kırılabilir" },
+    {
+      id: "small",
+      size: "S",
+      label: "Küçük",
+      desc: "< 2 kg",
+      color: "#276EF1",
+      baseEstimate: 25,
+    },
+    {
+      id: "medium",
+      size: "M",
+      label: "Orta",
+      desc: "2–10 kg",
+      color: "#F59E0B",
+      baseEstimate: 40,
+    },
+    {
+      id: "sensitive",
+      size: "XL",
+      label: "Büyük",
+      desc: "> 10 kg",
+      color: "#8B5CF6",
+      baseEstimate: 60,
+    },
   ];
 
+  // Create step map init
+  useEffect(() => {
+    if (step !== "create" || !createMapRef.current) return;
+    if (createMapInstanceRef.current) return;
+    const L = (window as any).L;
+    if (!L) return;
+    const map = L.map(createMapRef.current, {
+      zoomControl: false,
+      attributionControl: false,
+    });
+    L.tileLayer(
+      "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+      { subdomains: "abcd", maxZoom: 20 },
+    ).addTo(map);
+    map.setView([41.0082, 28.9784], 11);
+    createMapInstanceRef.current = map;
+    return () => {
+      if (createMapInstanceRef.current) {
+        createMapInstanceRef.current.remove();
+        createMapInstanceRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
+  const estimatedPrice = pricingResult.price;
+
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: bg }}>
-      {/* Header */}
-      <div
-        className="flex items-center gap-3 px-4 py-4 sticky top-0 z-40"
-        style={{ background: cardBg, borderBottom: `1px solid ${borderColor}` }}
-      >
-        <button
-          type="button"
-          onClick={onBack}
-          className="w-9 h-9 flex items-center justify-center rounded-full transition-colors"
-          style={{ background: isDark ? "#374151" : "#F6F6F6" }}
-          data-ocid="delivery.back.button"
-        >
-          <ArrowLeft className="w-5 h-5" style={{ color: textPrimary }} />
-        </button>
-        <div className="flex-1">
-          <h1 className="font-bold text-base" style={{ color: textPrimary }}>
-            📦 GHOST DELIVERY
-          </h1>
-          <p className="text-xs" style={{ color: textSecondary }}>
-            Anonim P2P Teslimat
-          </p>
-        </div>
+    <>
+      {/* CREATE STEP: fullscreen map + bottom panel */}
+      {step === "create" && (
         <div
-          className="px-2.5 py-1 rounded-full text-xs font-bold"
-          style={{ background: "rgba(39,110,241,0.12)", color: "#276EF1" }}
+          style={{ position: "relative", height: "100vh", overflow: "hidden" }}
         >
-          {[
-            "create",
-            "pricing",
-            "matching",
-            "tracking",
-            "code",
-            "summary",
-          ].indexOf(step) + 1}
-          /6
-        </div>
-      </div>
-
-      {/* Step indicators */}
-      <div className="flex gap-1 px-4 py-2" style={{ background: cardBg }}>
-        {(
-          [
-            "create",
-            "pricing",
-            "matching",
-            "tracking",
-            "code",
-            "summary",
-          ] as Step[]
-        ).map((s, i) => (
+          {/* Map layer */}
           <div
-            key={s}
-            className="flex-1 h-1 rounded-full transition-all duration-500"
-            style={{
-              background:
-                [
-                  "create",
-                  "pricing",
-                  "matching",
-                  "tracking",
-                  "code",
-                  "summary",
-                ].indexOf(step) >= i
-                  ? "#276EF1"
-                  : isDark
-                    ? "#374151"
-                    : "#E5E7EB",
-            }}
+            ref={createMapRef}
+            style={{ position: "absolute", inset: 0, zIndex: 0 }}
           />
-        ))}
-      </div>
 
-      <div className="flex-1 overflow-y-auto pb-6">
-        <AnimatePresence mode="wait">
-          {/* STEP 1: CREATE */}
-          {step === "create" && (
-            <motion.div
-              key="create"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              transition={{ duration: 0.2 }}
-              className="p-4"
-            >
-              <h2
-                className="font-bold text-lg mb-4"
-                style={{ color: textPrimary }}
-              >
-                Teslimat Oluştur
-              </h2>
+          {/* Back button */}
+          <button
+            type="button"
+            onClick={onBack}
+            className="flex items-center justify-center rounded-full transition-colors"
+            style={{
+              position: "absolute",
+              top: 16,
+              left: 16,
+              zIndex: 60,
+              width: 40,
+              height: 40,
+              background: "rgba(255,255,255,0.92)",
+              boxShadow: "0 2px 10px rgba(0,0,0,0.15)",
+            }}
+            data-ocid="delivery.back.button"
+          >
+            <ArrowLeft className="w-5 h-5" style={{ color: "#141414" }} />
+          </button>
 
+          {/* Bottom panel */}
+          <div
+            style={{
+              position: "fixed",
+              bottom: 0,
+              left: 0,
+              right: 0,
+              zIndex: 50,
+              background: isDark ? "#1F2937" : "#FFFFFF",
+              borderRadius: "20px 20px 0 0",
+              boxShadow: "0 -4px 30px rgba(0,0,0,0.15)",
+              maxHeight: "80vh",
+              overflowY: "auto",
+            }}
+          >
+            {/* Drag handle */}
+            <div className="flex justify-center pt-3 pb-2">
+              <div
+                className="w-10 h-1 rounded-full"
+                style={{ background: isDark ? "#4B5563" : "#D1D5DB" }}
+              />
+            </div>
+
+            <div className="px-5 pb-6">
+              {/* Title */}
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h1
+                    className="font-bold text-lg"
+                    style={{ color: isDark ? "#F9FAFB" : "#141414" }}
+                  >
+                    📦 GHOST DELIVERY
+                  </h1>
+                  <p
+                    className="text-xs"
+                    style={{ color: isDark ? "#9CA3AF" : "#6B7280" }}
+                  >
+                    Anonim P2P Teslimat
+                  </p>
+                </div>
+                <div
+                  className="px-2.5 py-1 rounded-full text-xs font-bold"
+                  style={{
+                    background: "rgba(39,110,241,0.12)",
+                    color: "#276EF1",
+                  }}
+                >
+                  1/6
+                </div>
+              </div>
+
+              {/* Address inputs */}
               <AddressInput
                 label="📍 Alım Noktası (A)"
                 placeholder="Teslimat başlangıç adresi..."
@@ -421,76 +486,102 @@ export default function GhostDeliveryPage({ onBack }: GhostDeliveryPageProps) {
                 placeholder="Teslimat hedef adresi..."
                 value={dropoffText}
                 onChange={setDropoffText}
-                onSelect={(display, lat, lng) => {
+                onSelect={(display, lat, lng, cc) => {
                   setDropoffText(display);
                   setDropoffCoord([lat, lng]);
+                  setDeliveryCurrency(detectCurrencyFromAddress(display, cc));
                 }}
                 isDark={isDark}
               />
 
+              {/* Package size selector */}
               <p
                 className="block text-xs font-semibold mb-2"
-                style={{ color: textSecondary }}
+                style={{ color: isDark ? "#9CA3AF" : "#6B7280" }}
               >
-                Paket Tipi
+                Paket Boyutu
               </p>
               <div className="grid grid-cols-3 gap-2 mb-4">
-                {PACKAGE_TYPES.map((pt) => (
+                {PACKAGE_SIZES.map((ps) => (
                   <button
-                    key={pt.id}
+                    key={ps.id}
                     type="button"
-                    onClick={() => setPackageType(pt.id)}
-                    className="flex flex-col items-center gap-1 py-3 px-2 rounded-xl transition-all"
+                    onClick={() => setPackageType(ps.id)}
+                    className="flex flex-col items-center gap-1 py-3.5 px-2 rounded-xl transition-all relative"
                     style={{
                       background:
-                        packageType === pt.id
-                          ? "rgba(39,110,241,0.12)"
+                        packageType === ps.id
+                          ? `${ps.color}18`
                           : isDark
-                            ? "#1F2937"
+                            ? "#374151"
                             : "#F6F6F6",
-                      border: `2px solid ${packageType === pt.id ? "#276EF1" : "transparent"}`,
+                      border: `2px solid ${packageType === ps.id ? ps.color : "transparent"}`,
                     }}
-                    data-ocid={`delivery.package_${pt.id}.button`}
+                    data-ocid={`delivery.package_${ps.id}.button`}
                   >
-                    <span className="text-2xl">{pt.emoji}</span>
+                    <span
+                      className="text-xl font-black leading-none"
+                      style={{
+                        color:
+                          packageType === ps.id
+                            ? ps.color
+                            : isDark
+                              ? "#F9FAFB"
+                              : "#141414",
+                      }}
+                    >
+                      {ps.size}
+                    </span>
                     <span
                       className="text-xs font-semibold"
                       style={{
-                        color: packageType === pt.id ? "#276EF1" : textPrimary,
+                        color:
+                          packageType === ps.id
+                            ? ps.color
+                            : isDark
+                              ? "#F9FAFB"
+                              : "#141414",
                       }}
                     >
-                      {pt.label}
+                      {ps.label}
                     </span>
                     <span
                       className="text-[10px]"
-                      style={{ color: textSecondary }}
+                      style={{ color: isDark ? "#9CA3AF" : "#6B7280" }}
                     >
-                      {pt.desc}
+                      {ps.desc}
                     </span>
                   </button>
                 ))}
               </div>
 
+              {/* Express toggle */}
               <div
-                className="flex items-center justify-between px-4 py-3.5 rounded-xl mb-6"
+                className="flex items-center justify-between px-4 py-3.5 rounded-xl mb-4"
                 style={{
                   background: expressMode
                     ? "rgba(245,158,11,0.08)"
                     : isDark
-                      ? "#1F2937"
+                      ? "#374151"
                       : "#F6F6F6",
                 }}
               >
                 <div>
                   <p
                     className="font-semibold text-sm"
-                    style={{ color: expressMode ? "#F59E0B" : textPrimary }}
+                    style={{
+                      color: expressMode
+                        ? "#F59E0B"
+                        : isDark
+                          ? "#F9FAFB"
+                          : "#141414",
+                    }}
                   >
                     ⚡ Express Mod
                   </p>
                   <p
                     className="text-xs mt-0.5"
-                    style={{ color: textSecondary }}
+                    style={{ color: isDark ? "#9CA3AF" : "#6B7280" }}
                   >
                     Daha hızlı eşleşme · x1.8 ücret · +10 token
                   </p>
@@ -502,486 +593,646 @@ export default function GhostDeliveryPage({ onBack }: GhostDeliveryPageProps) {
                 />
               </div>
 
+              {/* Price preview bar */}
+              <div
+                className="flex items-center justify-between px-4 py-3.5 rounded-xl mb-4"
+                style={{
+                  background: "rgba(39,110,241,0.07)",
+                  border: "1.5px solid rgba(39,110,241,0.2)",
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  <Zap className="w-4 h-4" style={{ color: "#276EF1" }} />
+                  <span
+                    className="text-sm font-semibold"
+                    style={{ color: isDark ? "#F9FAFB" : "#141414" }}
+                  >
+                    Tahmini Fiyat
+                  </span>
+                </div>
+                <div className="text-right">
+                  {pickupCoord && dropoffCoord ? (
+                    <span
+                      className="text-xl font-black"
+                      style={{ color: "#276EF1" }}
+                    >
+                      ~{currencySymbol}
+                      {deliveryCurrency === "EUR"
+                        ? estimatedPrice.toFixed(2)
+                        : Math.round(estimatedPrice)}
+                    </span>
+                  ) : (
+                    <span
+                      className="text-sm font-semibold"
+                      style={{ color: "#276EF1" }}
+                    >
+                      ~{currencySymbol}
+                      {deliveryCurrency === "EUR"
+                        ? estimatedPrice.toFixed(2)
+                        : Math.round(estimatedPrice)}
+                      <span
+                        className="text-xs font-normal ml-1"
+                        style={{ color: isDark ? "#9CA3AF" : "#6B7280" }}
+                      >
+                        tahmini
+                      </span>
+                    </span>
+                  )}
+                  {expressMode && (
+                    <p className="text-[10px]" style={{ color: "#F59E0B" }}>
+                      ⚡ Express
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* CTA button */}
               <button
                 type="button"
                 onClick={() => {
                   if (pickupCoord && dropoffCoord) setStep("pricing");
                 }}
                 disabled={!pickupCoord || !dropoffCoord}
-                className="w-full py-3.5 rounded-xl font-bold text-white text-sm tracking-wide transition-opacity"
+                className="w-full py-3.5 rounded-xl font-bold text-white text-sm tracking-wide transition-all"
                 style={{
                   background:
                     pickupCoord && dropoffCoord ? "#276EF1" : "#9CA3AF",
+                  opacity: pickupCoord && dropoffCoord ? 1 : 0.7,
                 }}
                 data-ocid="delivery.pricing.primary_button"
               >
                 FİYAT HESAPLA
               </button>
-            </motion.div>
-          )}
+            </div>
+          </div>
+        </div>
+      )}
 
-          {/* STEP 2: PRICING */}
-          {step === "pricing" && (
-            <motion.div
-              key="pricing"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              transition={{ duration: 0.2 }}
-              className="p-4"
+      {/* NON-CREATE STEPS: standard layout */}
+      {step !== "create" && (
+        <div className="min-h-screen flex flex-col" style={{ background: bg }}>
+          {/* Header */}
+          <div
+            className="flex items-center gap-3 px-4 py-4 sticky top-0 z-40"
+            style={{
+              background: cardBg,
+              borderBottom: `1px solid ${borderColor}`,
+            }}
+          >
+            <button
+              type="button"
+              onClick={onBack}
+              className="w-9 h-9 flex items-center justify-center rounded-full transition-colors"
+              style={{ background: isDark ? "#374151" : "#F6F6F6" }}
+              data-ocid="delivery.back.button"
             >
-              <h2
-                className="font-bold text-lg mb-4"
+              <ArrowLeft className="w-5 h-5" style={{ color: textPrimary }} />
+            </button>
+            <div className="flex-1">
+              <h1
+                className="font-bold text-base"
                 style={{ color: textPrimary }}
               >
-                AI Fiyat Analizi
-              </h2>
-
-              <div
-                className="rounded-2xl overflow-hidden mb-4"
-                style={{
-                  background: cardBg,
-                  border: `1px solid ${borderColor}`,
-                }}
-              >
-                <div
-                  className="px-4 py-3 flex items-center justify-between"
-                  style={{ borderBottom: `1px solid ${borderColor}` }}
-                >
-                  <span
-                    className="text-sm font-medium"
-                    style={{ color: textSecondary }}
-                  >
-                    Mesafe
-                  </span>
-                  <span
-                    className="text-sm font-bold"
-                    style={{ color: textPrimary }}
-                  >
-                    {distance.toFixed(1)} km
-                  </span>
-                </div>
-                <div
-                  className="px-4 py-3 flex items-center justify-between"
-                  style={{ borderBottom: `1px solid ${borderColor}` }}
-                >
-                  <span
-                    className="text-sm font-medium"
-                    style={{ color: textSecondary }}
-                  >
-                    Tahmini Süre
-                  </span>
-                  <span
-                    className="text-sm font-bold"
-                    style={{ color: textPrimary }}
-                  >
-                    ~{eta} dk
-                  </span>
-                </div>
-                <div
-                  className="px-4 py-3 flex items-center justify-between"
-                  style={{ borderBottom: `1px solid ${borderColor}` }}
-                >
-                  <span
-                    className="text-sm font-medium"
-                    style={{ color: textSecondary }}
-                  >
-                    Risk Seviyesi
-                  </span>
-                  <span
-                    className="text-sm font-bold"
-                    style={{ color: riskColor }}
-                  >
-                    {riskLabel}
-                  </span>
-                </div>
-                <div
-                  className="px-4 py-3 flex items-center justify-between"
-                  style={{ borderBottom: `1px solid ${borderColor}` }}
-                >
-                  <span
-                    className="text-sm font-medium"
-                    style={{ color: textSecondary }}
-                  >
-                    Teslimat Modu
-                  </span>
-                  <span
-                    className="text-sm font-bold"
-                    style={{ color: expressMode ? "#F59E0B" : "#10B981" }}
-                  >
-                    {expressMode ? "⚡ Express" : "🐢 Normal"}
-                  </span>
-                </div>
-                <div className="px-4 py-3 flex items-center justify-between">
-                  <span
-                    className="text-sm font-medium"
-                    style={{ color: textSecondary }}
-                  >
-                    Kazanılacak Token
-                  </span>
-                  <span
-                    className="text-sm font-bold"
-                    style={{ color: "#276EF1" }}
-                  >
-                    +{tokens} 🪙
-                  </span>
-                </div>
-              </div>
-
-              <div
-                className="rounded-2xl p-5 mb-4 flex items-center justify-between"
-                style={{
-                  background: "rgba(39,110,241,0.08)",
-                  border: "1.5px solid #276EF1",
-                }}
-              >
-                <div>
-                  <p
-                    className="text-xs font-medium mb-0.5"
-                    style={{ color: "#276EF1" }}
-                  >
-                    AI Önerilen Fiyat
-                  </p>
-                  <p
-                    className="text-3xl font-black"
-                    style={{ color: textPrimary }}
-                  >
-                    ₺{finalPrice.toFixed(0)}
-                  </p>
-                  {expressMode && (
-                    <p className="text-xs" style={{ color: "#F59E0B" }}>
-                      Temel: ₺{basePrice.toFixed(0)} × 1.8 (Express)
-                    </p>
-                  )}
-                </div>
-                <div className="text-4xl">💰</div>
-              </div>
-
-              <div
-                className="flex items-center gap-2 px-3 py-2.5 rounded-xl mb-5"
-                style={{ background: isDark ? "#1F2937" : "#F0FDF4" }}
-              >
-                <Shield className="w-4 h-4" style={{ color: "#10B981" }} />
-                <p
-                  className="text-xs"
-                  style={{ color: isDark ? "#34D399" : "#15803D" }}
-                >
-                  Nakit ödeme · Kişisel veri toplanmıyor · Oturum sonunda
-                  silinir
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setStep("matching")}
-                className="w-full py-3.5 rounded-xl font-bold text-white text-sm tracking-wide transition-opacity hover:opacity-90 mb-2"
-                style={{ background: "#276EF1" }}
-                data-ocid="delivery.confirm.primary_button"
-              >
-                ONAYLA & KURYE BUL
-              </button>
-              <button
-                type="button"
-                onClick={() => setStep("create")}
-                className="w-full py-2.5 rounded-xl text-sm font-medium transition-opacity hover:opacity-70"
-                style={{ color: textSecondary }}
-                data-ocid="delivery.back_to_create.button"
-              >
-                GERİ
-              </button>
-            </motion.div>
-          )}
-
-          {/* STEP 3: MATCHING */}
-          {step === "matching" && (
-            <MatchingStep
-              courierId={courierId}
-              isDark={isDark}
-              textPrimary={textPrimary}
-              textSecondary={textSecondary}
-              cardBg={cardBg}
-              borderColor={borderColor}
-              onMatched={() => setStep("tracking")}
-            />
-          )}
-
-          {/* STEP 4: TRACKING */}
-          {step === "tracking" && (
-            <motion.div
-              key="tracking"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="flex flex-col"
-              style={{ height: "calc(100vh - 140px)" }}
+                📦 GHOST DELIVERY
+              </h1>
+              <p className="text-xs" style={{ color: textSecondary }}>
+                Anonim P2P Teslimat
+              </p>
+            </div>
+            <div
+              className="px-2.5 py-1 rounded-full text-xs font-bold"
+              style={{ background: "rgba(39,110,241,0.12)", color: "#276EF1" }}
             >
-              {/* Map */}
-              <div className="flex-1 relative" style={{ minHeight: 280 }}>
-                <div
-                  ref={mapRef}
-                  className="w-full h-full"
-                  style={{ minHeight: 280 }}
-                />
-                {/* ETA badge */}
-                <div
-                  className="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full text-xs font-bold text-white shadow-lg z-10"
-                  style={{ background: "#141414" }}
-                >
-                  🚚 ~{Math.ceil(eta * (1 - trackProgress))} dk kaldı
-                </div>
-                {/* Progress bar */}
-                <div
-                  className="absolute bottom-0 left-0 right-0 h-1"
-                  style={{ background: isDark ? "#374151" : "#E5E7EB" }}
-                >
-                  <div
-                    className="h-full transition-all"
-                    style={{
-                      width: `${trackProgress * 100}%`,
-                      background: "#276EF1",
-                    }}
-                  />
-                </div>
-              </div>
-              {/* Bottom panel */}
+              {[
+                "create",
+                "pricing",
+                "matching",
+                "tracking",
+                "code",
+                "summary",
+              ].indexOf(step) + 1}
+              /6
+            </div>
+          </div>
+
+          {/* Step indicators */}
+          <div className="flex gap-1 px-4 py-2" style={{ background: cardBg }}>
+            {(
+              [
+                "create",
+                "pricing",
+                "matching",
+                "tracking",
+                "code",
+                "summary",
+              ] as Step[]
+            ).map((s, i) => (
               <div
-                className="p-4"
+                key={s}
+                className="flex-1 h-1 rounded-full transition-all duration-500"
                 style={{
-                  background: cardBg,
-                  borderTop: `1px solid ${borderColor}`,
+                  background:
+                    [
+                      "create",
+                      "pricing",
+                      "matching",
+                      "tracking",
+                      "code",
+                      "summary",
+                    ].indexOf(step) >= i
+                      ? "#276EF1"
+                      : isDark
+                        ? "#374151"
+                        : "#E5E7EB",
                 }}
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <p
-                      className="text-xs font-medium"
-                      style={{ color: textSecondary }}
-                    >
-                      Kurye
-                    </p>
-                    <p
-                      className="font-bold text-sm"
-                      style={{ color: textPrimary }}
-                    >
-                      {courierId}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p
-                      className="text-xs font-medium"
-                      style={{ color: textSecondary }}
-                    >
-                      Paket
-                    </p>
-                    <p
-                      className="font-bold text-sm"
-                      style={{ color: textPrimary }}
-                    >
-                      {packageType === "small"
-                        ? "📦 Küçük"
-                        : packageType === "medium"
-                          ? "📫 Orta"
-                          : "🔒 Hassas"}
-                    </p>
-                  </div>
-                </div>
-                {showCodeBtn && (
-                  <motion.button
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    type="button"
-                    onClick={() => setStep("code")}
-                    className="w-full py-3.5 rounded-xl font-bold text-white text-sm tracking-wide"
-                    style={{ background: "#276EF1" }}
-                    data-ocid="delivery.show_code.button"
+              />
+            ))}
+          </div>
+
+          <div className="flex-1 overflow-y-auto pb-6">
+            <AnimatePresence mode="wait">
+              {/* STEP 2: PRICING */}
+              {step === "pricing" && (
+                <motion.div
+                  key="pricing"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-4"
+                >
+                  <h2
+                    className="font-bold text-lg mb-4"
+                    style={{ color: textPrimary }}
                   >
-                    TESLİMAT KODU GÖSTER
-                  </motion.button>
-                )}
-                {!showCodeBtn && (
+                    AI Fiyat Analizi
+                  </h2>
+
                   <div
-                    className="flex items-center gap-2 px-3 py-2 rounded-xl"
-                    style={{ background: isDark ? "#374151" : "#F6F6F6" }}
+                    className="rounded-2xl overflow-hidden mb-4"
+                    style={{
+                      background: cardBg,
+                      border: `1px solid ${borderColor}`,
+                    }}
                   >
-                    <motion.div
-                      animate={{ scale: [1, 1.3, 1] }}
-                      transition={{
-                        repeat: Number.POSITIVE_INFINITY,
-                        duration: 1.5,
-                      }}
+                    <div
+                      className="px-4 py-3 flex items-center justify-between"
+                      style={{ borderBottom: `1px solid ${borderColor}` }}
+                    >
+                      <span
+                        className="text-sm font-medium"
+                        style={{ color: textSecondary }}
+                      >
+                        Mesafe
+                      </span>
+                      <span
+                        className="text-sm font-bold"
+                        style={{ color: textPrimary }}
+                      >
+                        {distance.toFixed(1)} km
+                      </span>
+                    </div>
+                    <div
+                      className="px-4 py-3 flex items-center justify-between"
+                      style={{ borderBottom: `1px solid ${borderColor}` }}
+                    >
+                      <span
+                        className="text-sm font-medium"
+                        style={{ color: textSecondary }}
+                      >
+                        Tahmini Süre
+                      </span>
+                      <span
+                        className="text-sm font-bold"
+                        style={{ color: textPrimary }}
+                      >
+                        ~{eta} dk
+                      </span>
+                    </div>
+                    <div
+                      className="px-4 py-3 flex items-center justify-between"
+                      style={{ borderBottom: `1px solid ${borderColor}` }}
+                    >
+                      <span
+                        className="text-sm font-medium"
+                        style={{ color: textSecondary }}
+                      >
+                        Risk Seviyesi
+                      </span>
+                      <span
+                        className="text-sm font-bold"
+                        style={{ color: riskColor }}
+                      >
+                        {riskLabel}
+                      </span>
+                    </div>
+                    <div
+                      className="px-4 py-3 flex items-center justify-between"
+                      style={{ borderBottom: `1px solid ${borderColor}` }}
+                    >
+                      <span
+                        className="text-sm font-medium"
+                        style={{ color: textSecondary }}
+                      >
+                        Teslimat Modu
+                      </span>
+                      <span
+                        className="text-sm font-bold"
+                        style={{ color: expressMode ? "#F59E0B" : "#10B981" }}
+                      >
+                        {expressMode ? "⚡ Express" : "🐢 Normal"}
+                      </span>
+                    </div>
+                    <div className="px-4 py-3 flex items-center justify-between">
+                      <span
+                        className="text-sm font-medium"
+                        style={{ color: textSecondary }}
+                      >
+                        Kazanılacak Token
+                      </span>
+                      <span
+                        className="text-sm font-bold"
+                        style={{ color: "#276EF1" }}
+                      >
+                        +{tokens} 🪙
+                      </span>
+                    </div>
+                  </div>
+
+                  <div
+                    className="rounded-2xl p-5 mb-4 flex items-center justify-between"
+                    style={{
+                      background: "rgba(39,110,241,0.08)",
+                      border: "1.5px solid #276EF1",
+                    }}
+                  >
+                    <div>
+                      <p
+                        className="text-xs font-medium mb-0.5"
+                        style={{ color: "#276EF1" }}
+                      >
+                        AI Önerilen Fiyat
+                      </p>
+                      <p
+                        className="text-3xl font-black"
+                        style={{ color: textPrimary }}
+                      >
+                        {currencySymbol}
+                        {deliveryCurrency === "EUR"
+                          ? finalPrice.toFixed(2)
+                          : Math.round(finalPrice)}
+                      </p>
+                      {expressMode && (
+                        <p className="text-xs" style={{ color: "#F59E0B" }}>
+                          Temel: {currencySymbol}
+                          {deliveryCurrency === "EUR"
+                            ? basePrice.toFixed(2)
+                            : Math.round(basePrice)}{" "}
+                          × 1.8 (Express)
+                        </p>
+                      )}
+                      {deliveryCurrency === "EUR" && (
+                        <p
+                          className="text-xs font-semibold mt-1"
+                          style={{ color: "#10B981" }}
+                        >
+                          ✓ Piyasanın %20 altında tavsiye fiyat
+                        </p>
+                      )}
+                    </div>
+                    <div className="text-4xl">💰</div>
+                  </div>
+
+                  <div
+                    className="flex items-center gap-2 px-3 py-2.5 rounded-xl mb-5"
+                    style={{ background: isDark ? "#1F2937" : "#F0FDF4" }}
+                  >
+                    <Shield className="w-4 h-4" style={{ color: "#10B981" }} />
+                    <p
+                      className="text-xs"
+                      style={{ color: isDark ? "#34D399" : "#15803D" }}
+                    >
+                      Nakit ödeme · Kişisel veri toplanmıyor · Oturum sonunda
+                      silinir
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setStep("matching")}
+                    className="w-full py-3.5 rounded-xl font-bold text-white text-sm tracking-wide transition-opacity hover:opacity-90 mb-2"
+                    style={{ background: "#276EF1" }}
+                    data-ocid="delivery.confirm.primary_button"
+                  >
+                    ONAYLA & KURYE BUL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStep("create")}
+                    className="w-full py-2.5 rounded-xl text-sm font-medium transition-opacity hover:opacity-70"
+                    style={{ color: textSecondary }}
+                    data-ocid="delivery.back_to_create.button"
+                  >
+                    GERİ
+                  </button>
+                </motion.div>
+              )}
+
+              {/* STEP 3: MATCHING */}
+              {step === "matching" && (
+                <MatchingStep
+                  courierId={courierId}
+                  isDark={isDark}
+                  textPrimary={textPrimary}
+                  textSecondary={textSecondary}
+                  cardBg={cardBg}
+                  borderColor={borderColor}
+                  onMatched={() => setStep("tracking")}
+                />
+              )}
+
+              {/* STEP 4: TRACKING */}
+              {step === "tracking" && (
+                <motion.div
+                  key="tracking"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="flex flex-col"
+                  style={{ height: "calc(100vh - 140px)" }}
+                >
+                  {/* Map */}
+                  <div className="flex-1 relative" style={{ minHeight: 280 }}>
+                    <div
+                      ref={mapRef}
+                      className="w-full h-full"
+                      style={{ minHeight: 280 }}
+                    />
+                    {/* ETA badge */}
+                    <div
+                      className="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full text-xs font-bold text-white shadow-lg z-10"
+                      style={{ background: "#141414" }}
+                    >
+                      🚚 ~{Math.ceil(eta * (1 - trackProgress))} dk kaldı
+                    </div>
+                    {/* Progress bar */}
+                    <div
+                      className="absolute bottom-0 left-0 right-0 h-1"
+                      style={{ background: isDark ? "#374151" : "#E5E7EB" }}
                     >
                       <div
-                        className="w-2 h-2 rounded-full"
-                        style={{ background: "#276EF1" }}
+                        className="h-full transition-all"
+                        style={{
+                          width: `${trackProgress * 100}%`,
+                          background: "#276EF1",
+                        }}
                       />
-                    </motion.div>
+                    </div>
+                  </div>
+                  {/* Bottom panel */}
+                  <div
+                    className="p-4"
+                    style={{
+                      background: cardBg,
+                      borderTop: `1px solid ${borderColor}`,
+                    }}
+                  >
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <p
+                          className="text-xs font-medium"
+                          style={{ color: textSecondary }}
+                        >
+                          Kurye
+                        </p>
+                        <p
+                          className="font-bold text-sm"
+                          style={{ color: textPrimary }}
+                        >
+                          {courierId}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p
+                          className="text-xs font-medium"
+                          style={{ color: textSecondary }}
+                        >
+                          Paket
+                        </p>
+                        <p
+                          className="font-bold text-sm"
+                          style={{ color: textPrimary }}
+                        >
+                          {packageType === "small"
+                            ? "📦 Küçük"
+                            : packageType === "medium"
+                              ? "📫 Orta"
+                              : "🔒 Hassas"}
+                        </p>
+                      </div>
+                    </div>
+                    {showCodeBtn && (
+                      <motion.button
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        type="button"
+                        onClick={() => setStep("code")}
+                        className="w-full py-3.5 rounded-xl font-bold text-white text-sm tracking-wide"
+                        style={{ background: "#276EF1" }}
+                        data-ocid="delivery.show_code.button"
+                      >
+                        TESLİMAT KODU GÖSTER
+                      </motion.button>
+                    )}
+                    {!showCodeBtn && (
+                      <div
+                        className="flex items-center gap-2 px-3 py-2 rounded-xl"
+                        style={{ background: isDark ? "#374151" : "#F6F6F6" }}
+                      >
+                        <motion.div
+                          animate={{ scale: [1, 1.3, 1] }}
+                          transition={{
+                            repeat: Number.POSITIVE_INFINITY,
+                            duration: 1.5,
+                          }}
+                        >
+                          <div
+                            className="w-2 h-2 rounded-full"
+                            style={{ background: "#276EF1" }}
+                          />
+                        </motion.div>
+                        <p
+                          className="text-xs font-medium"
+                          style={{ color: textSecondary }}
+                        >
+                          Kurye yolda... Hedefe ulaşınca kod gösterilecek
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+
+              {/* STEP 5: CODE */}
+              {step === "code" && (
+                <motion.div
+                  key="code"
+                  initial={{ opacity: 0, scale: 0.96 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-4"
+                >
+                  <h2
+                    className="font-bold text-lg mb-1"
+                    style={{ color: textPrimary }}
+                  >
+                    Teslimat Kodu
+                  </h2>
+                  <p className="text-xs mb-6" style={{ color: textSecondary }}>
+                    Bu tek kullanımlık kodu alıcıya verin
+                  </p>
+
+                  {/* Big code display */}
+                  <div
+                    className="rounded-2xl p-6 flex flex-col items-center mb-6"
+                    style={{
+                      background: "rgba(39,110,241,0.08)",
+                      border: "2px dashed #276EF1",
+                    }}
+                  >
                     <p
-                      className="text-xs font-medium"
+                      className="text-xs font-medium mb-3"
+                      style={{ color: "#276EF1" }}
+                    >
+                      TEK KULLANIMLIK KOD
+                    </p>
+                    <div className="flex gap-2">
+                      {deliveryCode.split("").map((digit, i) => (
+                        <div
+                          key={String.fromCharCode(65 + i)}
+                          className="w-10 h-12 flex items-center justify-center rounded-xl text-2xl font-black"
+                          style={{
+                            background: cardBg,
+                            color: textPrimary,
+                            boxShadow: "0 2px 8px rgba(39,110,241,0.2)",
+                          }}
+                        >
+                          {digit}
+                        </div>
+                      ))}
+                    </div>
+                    <p
+                      className="text-xs mt-3"
                       style={{ color: textSecondary }}
                     >
-                      Kurye yolda... Hedefe ulaşınca kod gösterilecek
+                      Alıcıya bu kodu verin
                     </p>
                   </div>
-                )}
-              </div>
-            </motion.div>
-          )}
 
-          {/* STEP 5: CODE */}
-          {step === "code" && (
-            <motion.div
-              key="code"
-              initial={{ opacity: 0, scale: 0.96 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="p-4"
-            >
-              <h2
-                className="font-bold text-lg mb-1"
-                style={{ color: textPrimary }}
-              >
-                Teslimat Kodu
-              </h2>
-              <p className="text-xs mb-6" style={{ color: textSecondary }}>
-                Bu tek kullanımlık kodu alıcıya verin
-              </p>
-
-              {/* Big code display */}
-              <div
-                className="rounded-2xl p-6 flex flex-col items-center mb-6"
-                style={{
-                  background: "rgba(39,110,241,0.08)",
-                  border: "2px dashed #276EF1",
-                }}
-              >
-                <p
-                  className="text-xs font-medium mb-3"
-                  style={{ color: "#276EF1" }}
-                >
-                  TEK KULLANIMLIK KOD
-                </p>
-                <div className="flex gap-2">
-                  {deliveryCode.split("").map((digit, i) => (
-                    <div
-                      key={String.fromCharCode(65 + i)}
-                      className="w-10 h-12 flex items-center justify-center rounded-xl text-2xl font-black"
-                      style={{
-                        background: cardBg,
-                        color: textPrimary,
-                        boxShadow: "0 2px 8px rgba(39,110,241,0.2)",
-                      }}
+                  <div className="mb-4">
+                    <p
+                      className="block text-xs font-semibold mb-1.5"
+                      style={{ color: textSecondary }}
                     >
-                      {digit}
-                    </div>
-                  ))}
-                </div>
-                <p className="text-xs mt-3" style={{ color: textSecondary }}>
-                  Alıcıya bu kodu verin
-                </p>
-              </div>
+                      Alıcı kodu girin
+                    </p>
+                    <input
+                      type="text"
+                      value={codeInput}
+                      onChange={(e) => {
+                        setCodeInput(e.target.value);
+                        setCodeError(false);
+                      }}
+                      placeholder="6 haneli kod..."
+                      maxLength={6}
+                      className="w-full px-3.5 py-3 rounded-xl text-sm text-center tracking-[0.3em] font-bold outline-none"
+                      style={{
+                        background: isDark ? "#1F2937" : "#F6F6F6",
+                        color: codeError ? "#EF4444" : textPrimary,
+                        border: `1.5px solid ${codeError ? "#EF4444" : borderColor}`,
+                        fontSize: 20,
+                      }}
+                      data-ocid="delivery.code.input"
+                    />
+                    {codeError && (
+                      <p
+                        className="text-xs mt-1 text-red-500"
+                        data-ocid="delivery.code.error_state"
+                      >
+                        Kod eşleşmedi. Tekrar deneyin.
+                      </p>
+                    )}
+                  </div>
 
-              <div className="mb-4">
-                <p
-                  className="block text-xs font-semibold mb-1.5"
-                  style={{ color: textSecondary }}
-                >
-                  Alıcı kodu girin
-                </p>
-                <input
-                  type="text"
-                  value={codeInput}
-                  onChange={(e) => {
-                    setCodeInput(e.target.value);
-                    setCodeError(false);
-                  }}
-                  placeholder="6 haneli kod..."
-                  maxLength={6}
-                  className="w-full px-3.5 py-3 rounded-xl text-sm text-center tracking-[0.3em] font-bold outline-none"
-                  style={{
-                    background: isDark ? "#1F2937" : "#F6F6F6",
-                    color: codeError ? "#EF4444" : textPrimary,
-                    border: `1.5px solid ${codeError ? "#EF4444" : borderColor}`,
-                    fontSize: 20,
-                  }}
-                  data-ocid="delivery.code.input"
-                />
-                {codeError && (
-                  <p
-                    className="text-xs mt-1 text-red-500"
-                    data-ocid="delivery.code.error_state"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (codeInput === deliveryCode) setStep("summary");
+                      else setCodeError(true);
+                    }}
+                    className="w-full py-3.5 rounded-xl font-bold text-white text-sm tracking-wide transition-opacity hover:opacity-90 mb-4"
+                    style={{ background: "#276EF1" }}
+                    data-ocid="delivery.complete.submit_button"
                   >
-                    Kod eşleşmedi. Tekrar deneyin.
-                  </p>
-                )}
-              </div>
+                    TAMAMLA
+                  </button>
 
-              <button
-                type="button"
-                onClick={() => {
-                  if (codeInput === deliveryCode) setStep("summary");
-                  else setCodeError(true);
-                }}
-                className="w-full py-3.5 rounded-xl font-bold text-white text-sm tracking-wide transition-opacity hover:opacity-90 mb-4"
-                style={{ background: "#276EF1" }}
-                data-ocid="delivery.complete.submit_button"
-              >
-                TAMAMLA
-              </button>
+                  <div
+                    className="flex items-center gap-2 px-3 py-2.5 rounded-xl"
+                    style={{ background: isDark ? "#1F2937" : "#F0FDF4" }}
+                  >
+                    <Shield
+                      className="w-4 h-4 flex-shrink-0"
+                      style={{ color: "#10B981" }}
+                    />
+                    <p
+                      className="text-xs"
+                      style={{ color: isDark ? "#34D399" : "#15803D" }}
+                    >
+                      Kişisel veri saklanmıyor • Oturum silinecek
+                    </p>
+                  </div>
+                </motion.div>
+              )}
 
-              <div
-                className="flex items-center gap-2 px-3 py-2.5 rounded-xl"
-                style={{ background: isDark ? "#1F2937" : "#F0FDF4" }}
-              >
-                <Shield
-                  className="w-4 h-4 flex-shrink-0"
-                  style={{ color: "#10B981" }}
+              {/* STEP 6: SUMMARY */}
+              {step === "summary" && (
+                <SummaryStep
+                  isDark={isDark}
+                  textPrimary={textPrimary}
+                  textSecondary={textSecondary}
+                  cardBg={cardBg}
+                  borderColor={borderColor}
+                  duration={duration}
+                  distance={distance}
+                  packageType={packageType}
+                  expressMode={expressMode}
+                  tokens={tokens}
+                  rating={rating}
+                  setRating={setRating}
+                  courierId={courierId}
+                  onNewDelivery={() => {
+                    setStep("create");
+                    setPickupText("");
+                    setDropoffText("");
+                    setPickupCoord(null);
+                    setDropoffCoord(null);
+                    setCodeInput("");
+                    setCodeError(false);
+                    setRating(0);
+                    setTrackProgress(0);
+                    setShowCodeBtn(false);
+                  }}
+                  onBack={onBack}
                 />
-                <p
-                  className="text-xs"
-                  style={{ color: isDark ? "#34D399" : "#15803D" }}
-                >
-                  Kişisel veri saklanmıyor • Oturum silinecek
-                </p>
-              </div>
-            </motion.div>
-          )}
-
-          {/* STEP 6: SUMMARY */}
-          {step === "summary" && (
-            <SummaryStep
-              isDark={isDark}
-              textPrimary={textPrimary}
-              textSecondary={textSecondary}
-              cardBg={cardBg}
-              borderColor={borderColor}
-              duration={duration}
-              distance={distance}
-              packageType={packageType}
-              expressMode={expressMode}
-              tokens={tokens}
-              rating={rating}
-              setRating={setRating}
-              courierId={courierId}
-              onNewDelivery={() => {
-                setStep("create");
-                setPickupText("");
-                setDropoffText("");
-                setPickupCoord(null);
-                setDropoffCoord(null);
-                setCodeInput("");
-                setCodeError(false);
-                setRating(0);
-                setTrackProgress(0);
-                setShowCodeBtn(false);
-              }}
-              onBack={onBack}
-            />
-          )}
-        </AnimatePresence>
-      </div>
-    </div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

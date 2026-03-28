@@ -60,6 +60,7 @@ export interface _SERVICE {
   'sendGroupMessage' : ActorMethod<[string, string, string], boolean>,
   'sendMessage' : ActorMethod<[string, string, string], boolean>,
   'submitRating' : ActorMethod<[string, string, bigint], boolean>,
+  'getRideStatus' : ActorMethod<[string], [string, string]>,
   'updateRideStatus' : ActorMethod<[string, string, string], boolean>,
 }
 export declare const idlService: IDL.ServiceClass;

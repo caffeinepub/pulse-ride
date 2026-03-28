@@ -416,6 +416,20 @@ actor {
     updateRideHelper(rideId, sessionId, newStatus);
   };
 
+
+  /// Returns (status, driverSessionId_or_empty) for a ride.
+  public query ({ caller }) func getRideStatus(rideId : Text) : async (Text, Text) {
+    switch (rideRequests.get(rideId)) {
+      case (?ride) {
+        let driverId = switch (ride.driverSessionId) {
+          case (?d) { d };
+          case (null) { "" };
+        };
+        (ride.status, driverId);
+      };
+      case (null) { ("not_found", "") };
+    };
+  };
   // --- Chat Functions ---
   public shared ({ caller }) func sendMessage(rideId : Text, senderSessionId : Text, encryptedText : Text) : async Bool {
     // Session-based authorization: verify sender is a participant

@@ -45,5 +45,6 @@ export interface backendInterface {
     sendGroupMessage(groupCode: string, sessionId: string, message: string): Promise<boolean>;
     sendMessage(rideId: string, senderSessionId: string, encryptedText: string): Promise<boolean>;
     submitRating(rideId: string, raterSessionId: string, stars: bigint): Promise<boolean>;
+    getRideStatus(rideId: string): Promise<[string, string]>;
     updateRideStatus(rideId: string, sessionId: string, newStatus: string): Promise<boolean>;
 }
