@@ -1,28 +1,33 @@
 # PulseRide
 
 ## Current State
-PulseRide is a feature-rich anonymous ride-sharing platform with a cyberpunk dark UI (neon purple/cyan on dark backgrounds). It has LandingPage, RiderDashboard, DriverDashboard, LiveRideMapPage, and multiple special feature pages. The app has no bottom navigation bar — all navigation is page-based.
+LiveRideMapPage uses CartoDB dark tiles, Leaflet CDN loader, OSRM routing, and a showSearchScreen state. When user selects address from search, destSnap.current is updated and showSearchScreen=false triggers map init effect. Errors occur on transition. Car animation is emoji-based with setInterval.
 
 ## Requested Changes (Diff)
 
 ### Add
-- Bottom navigation bar (tab bar) on main app screens (Landing, Rider, Driver dashboards) similar to Uber/Yandex style: clean, white/light background, icon + label tabs
-- App-wide professional color scheme update to match Uber/Yandex aesthetic: dark navy/black primary, bright blue (#276EF1 Uber blue) as accent, clean whites and grays
+- Light Uber-style map tiles (CartoDB Voyager - white/light grey)
+- Smooth car animation using requestAnimationFrame with linear interpolation between route waypoints
+- Uber-style bottom sheet: confirm screen with price, ETA, car type, cash payment button
+- Black ETA badge floating on map (like Uber's "3 DK" badge)
+- Proper map key to force re-mount when coords change
 
 ### Modify
-- LandingPage: Redesign to Uber/Yandex-like professional look with clean bottom bar showing tabs: Home, Ride, Drive, Messages (Ghost Chat), More
-- RiderDashboard: Professional clean layout with white cards, dark header, Uber blue accents, bottom tab bar
-- DriverDashboard: Same professional treatment
-- index.css: Update color tokens to professional Uber-like palette while preserving all animations
-- All feature pages: Keep all existing functionality but update colors to be consistent
+- Fix map initialization: pass coords as props/state instead of refs to avoid stale closure bugs
+- Fix transition from search screen to map (use key prop to force remount)
+- Car icon: white car SVG/emoji with shadow, rotates to face direction of travel
+- Route line: dark/black color like Uber (not blue)
+- Map tiles: light voyager theme
+- Remove dark overlay, use clean white bottom panel
 
 ### Remove
-- Excessive neon glow effects on the main landing page (keep subtle ones)
-- Overly dark cyberpunk styling on rider/driver dashboards (keep ghost/phantom feature styling)
+- CartoDB dark tiles
+- stale ref-based coord management causing errors
 
 ## Implementation Plan
-1. Add a shared BottomTabBar component with 5 tabs: Home, Rider, Driver, Chat, More
-2. Update index.css to add Uber-like CSS variables and professional color utilities
-3. Redesign LandingPage with professional Uber/Yandex-inspired layout + BottomTabBar
-4. Update RiderDashboard and DriverDashboard with professional card styles and bottom bar
-5. All other pages (GhostChat, GhostGroup, etc.) keep existing styling but get bottom safe area padding
+1. Rewrite LiveRideMapPage with a clean 3-phase UI: search → confirm → riding
+2. Fix address→map transition by using React state for coords (not just refs)
+3. Use voyager light tiles
+4. Smooth rAF-based car animation along OSRM route
+5. Uber-style confirm panel before ride starts
+6. Floating ETA badge on map

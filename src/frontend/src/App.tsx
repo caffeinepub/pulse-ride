@@ -6,7 +6,7 @@ import GhostAlarmSetupPage from "@/pages/GhostAlarmSetupPage";
 import GhostChatPage from "@/pages/GhostChatPage";
 import GhostDuelloPage from "@/pages/GhostDuelloPage";
 import GhostGroupPage from "@/pages/GhostGroupPage";
-import LandingPage from "@/pages/LandingPage";
+import HomePage from "@/pages/HomePage";
 import LiveRideMapPage from "@/pages/LiveRideMapPage";
 import PulseMemoryBombPage from "@/pages/PulseMemoryBombPage";
 import RiderDashboard from "@/pages/RiderDashboard";
@@ -21,6 +21,7 @@ export type AppView =
   | "session-start-driver"
   | "rider"
   | "driver"
+  | "map"
   | "viral-mode"
   | "secure-comm"
   | "ghost-chat"
@@ -37,11 +38,12 @@ export interface SessionState {
 
 type BottomTab = "home" | "rider" | "driver" | "ghost" | "more";
 
-const BOTTOM_BAR_VIEWS: AppView[] = ["landing", "rider", "driver"];
+const BOTTOM_BAR_VIEWS: AppView[] = ["landing", "rider", "driver", "map"];
 
 function getActiveTab(view: AppView, _session: SessionState | null): BottomTab {
   if (view === "landing") return "home";
-  if (view === "rider" || view === "session-start-rider") return "rider";
+  if (view === "rider" || view === "session-start-rider" || view === "map")
+    return "rider";
   if (view === "driver" || view === "session-start-driver") return "driver";
   if (view === "ghost-chat" || view === "ghost-group") return "ghost";
   if (
@@ -71,6 +73,16 @@ export default function App() {
     setView("landing");
   };
 
+  const handleStartRider = (sessionId: string) => {
+    setSession({ sessionId, role: "rider" });
+    setView("map");
+  };
+
+  const handleStartDriver = (sessionId: string) => {
+    setSession({ sessionId, role: "driver" });
+    setView("driver");
+  };
+
   const showBottomBar = BOTTOM_BAR_VIEWS.includes(view);
   const activeTab = getActiveTab(view, session);
 
@@ -79,15 +91,15 @@ export default function App() {
       setView("landing");
     } else if (tab === "rider") {
       if (session?.role === "rider") {
-        setView("rider");
+        setView("map");
       } else {
-        setView("session-start-rider");
+        setView("landing");
       }
     } else if (tab === "driver") {
       if (session?.role === "driver") {
         setView("driver");
       } else {
-        setView("session-start-driver");
+        setView("landing");
       }
     } else if (tab === "ghost") {
       setView("ghost-chat");
@@ -100,9 +112,9 @@ export default function App() {
     <div className="min-h-screen bg-white">
       <PWAInstallBanner />
       {view === "landing" && (
-        <LandingPage
-          onRideNow={() => setView("session-start-rider")}
-          onJoinDriver={() => setView("session-start-driver")}
+        <HomePage
+          onStartRider={handleStartRider}
+          onStartDriver={handleStartDriver}
           onViralMode={() => setView("viral-mode")}
           onSecureComm={() => setView("secure-comm")}
           onGhostChat={() => setView("ghost-chat")}
@@ -146,6 +158,14 @@ export default function App() {
         <GhostChatPage onBack={() => setView("landing")} />
       )}
       {view === "live-map" && <LiveRideMapPage onBack={handleEndSession} />}
+      {view === "map" && (
+        <LiveRideMapPage
+          onBack={handleEndSession}
+          sessionId={session?.sessionId}
+          role={session?.role}
+          showAddressSearch={true}
+        />
+      )}
       {view === "ghost-group" && (
         <GhostGroupPage onBack={() => setView("landing")} />
       )}
