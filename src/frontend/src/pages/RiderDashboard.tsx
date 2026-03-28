@@ -17,6 +17,7 @@ import {
   Lock,
   LogOut,
   MapPin,
+  Search,
   Send,
   Share2,
   Shield,
@@ -52,6 +53,13 @@ interface DetectedLocation {
   lat: number;
   lng: number;
   label: string;
+}
+
+interface NominatimResult {
+  place_id: number;
+  display_name: string;
+  lat: string;
+  lon: string;
 }
 
 const MOODS = [
@@ -90,13 +98,11 @@ function calcAiPrice(
 ): AiPriceData {
   let distance: number;
   if (coords) {
-    // Use coords for more realistic distance calculation from Istanbul center
     const centerLat = 41.0082;
     const centerLng = 28.9784;
     const dlat = coords.lat - centerLat;
     const dlng = coords.lng - centerLng;
     const rawDist = Math.sqrt(dlat * dlat + dlng * dlng) * 111;
-    // Add dropoff entropy
     const entropy = (dropoff.length * 1.7) % 18;
     distance = Math.max(2, Math.min(30, rawDist + entropy + 3));
     distance = Math.round(distance * 10) / 10;
@@ -146,6 +152,13 @@ export default function RiderDashboard({
     "detecting" | "found" | "denied"
   >("detecting");
   const [dropoffZone, setDropoffZone] = useState("");
+  const [dropoffCoords, setDropoffCoords] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
+  const [searchResults, setSearchResults] = useState<NominatimResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
   const [phantomMode, setPhantomMode] = useState(false);
   const [rideId, setRideId] = useState<string | null>(null);
   const [sessionCode, setSessionCode] = useState<string | null>(null);
@@ -163,6 +176,8 @@ export default function RiderDashboard({
   const [sessionTerminated, setSessionTerminated] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const phantomRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Auto-detect passenger location on mount
   useEffect(() => {
@@ -231,6 +246,62 @@ export default function RiderDashboard({
     };
   }, [phantomMode, rideId]);
 
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target as Node)
+      ) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Debounced geocoding search
+  const handleDropoffChange = useCallback((value: string) => {
+    setDropoffZone(value);
+    setDropoffCoords(null); // clear coords when typing manually
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    if (value.trim().length < 3) {
+      setSearchResults([]);
+      setShowDropdown(false);
+      return;
+    }
+
+    debounceRef.current = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(value)}&format=json&limit=5&countrycodes=tr&accept-language=tr`,
+          { headers: { "User-Agent": "PulseRide/1.0" } },
+        );
+        const data: NominatimResult[] = await res.json();
+        setSearchResults(data);
+        setShowDropdown(data.length > 0);
+      } catch {
+        setSearchResults([]);
+        setShowDropdown(false);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 400);
+  }, []);
+
+  const handleSelectResult = useCallback((result: NominatimResult) => {
+    setDropoffZone(result.display_name);
+    setDropoffCoords({
+      lat: Number.parseFloat(result.lat),
+      lng: Number.parseFloat(result.lon),
+    });
+    setShowDropdown(false);
+    setSearchResults([]);
+  }, []);
+
   const handleCalculatePrice = useCallback(async () => {
     if (!actor || !dropoffZone.trim()) return;
     setLoading(true);
@@ -244,7 +315,7 @@ export default function RiderDashboard({
       );
       setRideId(rid);
       setSessionCode(code);
-      const priceData = calcAiPrice(dropoffZone, detectedLocation);
+      const priceData = calcAiPrice(dropoffZone, dropoffCoords);
       setAiPriceData(priceData);
       setRideStatus("pricing");
       toast.success("AI pricing calculated — review before approving");
@@ -253,7 +324,14 @@ export default function RiderDashboard({
     } finally {
       setLoading(false);
     }
-  }, [actor, dropoffZone, phantomMode, session.sessionId, detectedLocation]);
+  }, [
+    actor,
+    dropoffZone,
+    dropoffCoords,
+    phantomMode,
+    session.sessionId,
+    detectedLocation,
+  ]);
 
   const handleApproveRide = useCallback(async () => {
     if (!actor || !rideId) return;
@@ -499,7 +577,6 @@ export default function RiderDashboard({
                         PICKUP LOCATION
                       </span>
                     </div>
-                    {/* Status badge */}
                     {locationStatus === "detecting" && (
                       <div
                         className="flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider"
@@ -542,7 +619,6 @@ export default function RiderDashboard({
                     )}
                   </div>
 
-                  {/* Coordinates display */}
                   <div
                     className="font-mono text-sm tracking-wider"
                     style={{
@@ -577,19 +653,145 @@ export default function RiderDashboard({
                   )}
                 </div>
 
-                {/* Destination input */}
-                <div>
+                {/* Geocoding Destination Input */}
+                <div ref={dropdownRef} className="relative">
                   <Label className="text-xs uppercase tracking-wider text-[#a7b0c2] mb-2 block">
                     DESTINATION ADDRESS
                   </Label>
-                  <Input
-                    value={dropoffZone}
-                    onChange={(e) => setDropoffZone(e.target.value)}
-                    placeholder="Enter destination (e.g. Taksim, Kadıköy, Airport)"
-                    className="bg-white/5 border-white/10 text-white placeholder:text-white/30 focus:border-purple-500/50"
-                    data-ocid="rider.dropoff_zone.input"
-                  />
+                  <div className="relative">
+                    <Input
+                      value={dropoffZone}
+                      onChange={(e) => handleDropoffChange(e.target.value)}
+                      onFocus={() =>
+                        searchResults.length > 0 && setShowDropdown(true)
+                      }
+                      placeholder="Mahalle, sokak veya yer adı yazın..."
+                      className="bg-white/5 border-white/10 text-white placeholder:text-white/30 focus:border-purple-500/50 pr-10"
+                      data-ocid="rider.dropoff_zone.input"
+                      autoComplete="off"
+                    />
+                    {/* Right-side icon */}
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                      {isSearching ? (
+                        <span
+                          className="inline-block w-4 h-4 rounded-full border-2 animate-spin"
+                          style={{
+                            borderColor: "rgba(168,85,255,0.6)",
+                            borderTopColor: "#a855ff",
+                          }}
+                        />
+                      ) : dropoffCoords ? (
+                        <MapPin
+                          className="w-4 h-4"
+                          style={{ color: "#00ff88" }}
+                        />
+                      ) : (
+                        <Search className="w-4 h-4 text-white/30" />
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Coords confirmed badge */}
+                  {dropoffCoords && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="mt-1.5 flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 rounded-full w-fit uppercase tracking-wider"
+                      style={{
+                        background: "rgba(0,255,136,0.1)",
+                        border: "1px solid rgba(0,255,136,0.35)",
+                        color: "#00ff88",
+                      }}
+                    >
+                      ✓ KONUM ONAYLANDI — {dropoffCoords.lat.toFixed(4)}°N{" "}
+                      {dropoffCoords.lng.toFixed(4)}°E
+                    </motion.div>
+                  )}
+
+                  {/* Dropdown results */}
+                  <AnimatePresence>
+                    {showDropdown && searchResults.length > 0 && (
+                      <motion.div
+                        key="geo-dropdown"
+                        initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                        transition={{ duration: 0.15 }}
+                        className="absolute left-0 right-0 mt-1.5 rounded-xl overflow-hidden z-50"
+                        style={{
+                          background: "rgba(5,8,20,0.97)",
+                          border: "1px solid rgba(168,85,255,0.4)",
+                          boxShadow:
+                            "0 8px 32px rgba(0,0,0,0.6), 0 0 20px rgba(168,85,255,0.08)",
+                        }}
+                      >
+                        <div
+                          className="px-3 py-1.5 flex items-center gap-1.5"
+                          style={{
+                            borderBottom: "1px solid rgba(168,85,255,0.15)",
+                            background: "rgba(168,85,255,0.06)",
+                          }}
+                        >
+                          <Search
+                            className="w-3 h-3"
+                            style={{ color: "#a855ff" }}
+                          />
+                          <span
+                            className="text-[10px] uppercase tracking-widest font-bold"
+                            style={{ color: "#a855ff" }}
+                          >
+                            {searchResults.length} SONUÇ BULUNDU
+                          </span>
+                        </div>
+                        {searchResults.map((result, idx) => (
+                          <button
+                            key={result.place_id}
+                            type="button"
+                            onClick={() => handleSelectResult(result)}
+                            className="w-full text-left px-4 py-3 flex items-start gap-3 transition-all group"
+                            style={{
+                              borderBottom:
+                                idx < searchResults.length - 1
+                                  ? "1px solid rgba(255,255,255,0.04)"
+                                  : "none",
+                            }}
+                            onMouseEnter={(e) => {
+                              (
+                                e.currentTarget as HTMLButtonElement
+                              ).style.background = "rgba(168,85,255,0.12)";
+                            }}
+                            onMouseLeave={(e) => {
+                              (
+                                e.currentTarget as HTMLButtonElement
+                              ).style.background = "transparent";
+                            }}
+                            data-ocid={`rider.address_result.item.${idx + 1}`}
+                          >
+                            <MapPin
+                              className="w-3.5 h-3.5 mt-0.5 flex-shrink-0"
+                              style={{ color: "rgba(168,85,255,0.7)" }}
+                            />
+                            <div className="min-w-0">
+                              <p className="text-sm text-white leading-snug truncate">
+                                {result.display_name.length > 60
+                                  ? `${result.display_name.slice(0, 60)}…`
+                                  : result.display_name}
+                              </p>
+                              <p
+                                className="text-[10px] mt-0.5 font-mono"
+                                style={{ color: "#a7b0c2" }}
+                              >
+                                {Number.parseFloat(result.lat).toFixed(4)}°N{" "}
+                                {Number.parseFloat(result.lon).toFixed(4)}°E
+                              </p>
+                            </div>
+                          </button>
+                        ))}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
+
                 <Button
                   onClick={handleCalculatePrice}
                   disabled={loading || !dropoffZone.trim()}
@@ -617,7 +819,6 @@ export default function RiderDashboard({
               }}
               data-ocid="rider.pricing_card"
             >
-              {/* Animated glow border */}
               <div
                 className="absolute inset-0 rounded-2xl pointer-events-none"
                 style={{
@@ -626,7 +827,6 @@ export default function RiderDashboard({
                 }}
               />
 
-              {/* Header */}
               <div className="flex items-center justify-between mb-5">
                 <h2 className="text-sm font-bold uppercase tracking-widest text-white">
                   AI PRICE ANALYSIS
@@ -645,7 +845,6 @@ export default function RiderDashboard({
                 </motion.div>
               </div>
 
-              {/* Stats row */}
               <div className="grid grid-cols-3 gap-3 mb-5">
                 <div
                   className="text-center p-3 rounded-xl"
@@ -700,7 +899,6 @@ export default function RiderDashboard({
                 </div>
               </div>
 
-              {/* Phantom experience line */}
               {phantomMode && (
                 <motion.div
                   initial={{ opacity: 0, x: -10 }}
@@ -724,7 +922,6 @@ export default function RiderDashboard({
                 </motion.div>
               )}
 
-              {/* Price display */}
               <div className="text-center py-4 mb-5">
                 <p className="text-xs uppercase tracking-widest text-[#a7b0c2] mb-2">
                   RECOMMENDED CASH PRICE
@@ -748,7 +945,6 @@ export default function RiderDashboard({
                 </p>
               </div>
 
-              {/* Action buttons */}
               <div className="grid grid-cols-2 gap-3 mb-4">
                 <Button
                   onClick={handleApproveRide}
@@ -778,7 +974,6 @@ export default function RiderDashboard({
                 </Button>
               </div>
 
-              {/* Disclaimer */}
               <p className="text-center text-[10px] text-[#a7b0c2]">
                 Ride begins only after your approval • Cash payment at
                 destination
@@ -1160,11 +1355,10 @@ export default function RiderDashboard({
                 onClick={() => {
                   navigator.clipboard
                     .writeText(
-                      `PulseRide #GHOST-${session.sessionId.slice(-4).toUpperCase()} — Anonim s\xfcr\xfc\u015f! #PulseRide #ViralMod`,
+                      `PulseRide #GHOST-${session.sessionId.slice(-4).toUpperCase()} — Anonim sürüş! #PulseRide #ViralMod`,
                     )
                     .then(() => {
-                      const { toast: t } = require("sonner");
-                      t.success("Anonim link kopyaland\u0131! 🔗");
+                      toast.success("Anonim link kopyalandı! 🔗");
                     });
                 }}
                 className="flex-1 text-[10px] font-bold py-2 rounded-full uppercase tracking-wider"
