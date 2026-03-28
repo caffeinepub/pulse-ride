@@ -167,6 +167,12 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
   const [elapsed, setElapsed] = useState(0);
   const [msgCount, setMsgCount] = useState(0);
 
+  // Call signal forwarding: GhostChatPage receives signals from poll and pushes to overlay
+  const [callSignal, setCallSignal] = useState<{
+    type: string;
+    payload: unknown;
+  } | null>(null);
+
   // P2P password mode
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>("setup");
   const [passwordInput, setPasswordInput] = useState("");
@@ -183,11 +189,26 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
   const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // sessionIdRef: persists the valid backend session ID across closures
   const sessionIdRef = useRef<string>(myId);
+  // lastMsgIndexRef: keeps the latest value accessible inside the polling closure
+  const lastMsgIndexRef = useRef<number>(0);
 
   const photoRef = useRef<HTMLInputElement>(null);
   const docRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const startTime = useRef(Date.now());
+
+  // Keep lastMsgIndexRef in sync with state
+  useEffect(() => {
+    lastMsgIndexRef.current = lastMsgIndex;
+  }, [lastMsgIndex]);
+
+  // Reset callSignal after a tick so overlay gets a fresh edge each time
+  useEffect(() => {
+    if (callSignal) {
+      const t = setTimeout(() => setCallSignal(null), 50);
+      return () => clearTimeout(t);
+    }
+  }, [callSignal]);
 
   // Session timer
   useEffect(() => {
@@ -250,55 +271,73 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
   }, [partnerId, connectionMode]);
 
   // P2P message polling (only active in p2p mode)
+  // IMPORTANT: showCallOverlay is intentionally excluded from deps to prevent
+  // polling restarts during active calls, which would cause ICE candidate loss.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: showCallOverlay excluded intentionally
   useEffect(() => {
     if (connectionMode !== "p2p" || !actor || !roomCode) return;
     p2pPollRef.current = setInterval(async () => {
       try {
+        const currentIndex = lastMsgIndexRef.current;
         const msgs = await actor.getGroupMessages(
           roomCode,
           sessionIdRef.current,
-          BigInt(lastMsgIndex),
+          BigInt(currentIndex),
         );
         if (msgs.length > 0) {
-          let newIndex = lastMsgIndex;
+          let newIndex = currentIndex;
           const newMsgs: ChatMessage[] = [];
           for (const [senderId, text, idx] of msgs) {
             const numIdx = Number(idx);
-            if (
-              numIdx >= lastMsgIndex &&
-              senderId !== myId &&
-              !text.startsWith("__CALL__:")
-            ) {
-              const expiresAt = genExpiry(deleteMode);
-              newMsgs.push({
-                id: `p2p-${numIdx}`,
-                type: "text",
-                content: text,
-                sender: "ghost",
-                senderLabel: partnerId,
-                deleteMode,
-                createdAt: Date.now(),
-                expiresAt,
-                countdown: getCountdown(expiresAt),
-              });
-            }
+            // Always advance index for ALL messages (including call signals)
             if (numIdx + 1 > newIndex) newIndex = numIdx + 1;
-            // Detect incoming GHOST CALL invite
-            if (
-              numIdx >= lastMsgIndex &&
-              senderId !== myId &&
-              text.startsWith("__CALL__:INVITE:") &&
-              !showCallOverlay
-            ) {
-              setIsCallInitiator(false);
-              setShowCallOverlay(true);
+
+            if (senderId === myId) continue;
+            if (numIdx < currentIndex) continue;
+
+            // Handle CALL signals — forward to overlay, do NOT add to chat
+            if (text.startsWith("__CALL__:")) {
+              const rest = text.slice("__CALL__:".length);
+              const colonIdx = rest.indexOf(":");
+              const sigType = colonIdx >= 0 ? rest.slice(0, colonIdx) : rest;
+              const payloadStr =
+                colonIdx >= 0 ? rest.slice(colonIdx + 1) : "{}";
+              try {
+                const payload = JSON.parse(payloadStr);
+                // Show incoming call overlay on INVITE
+                if (sigType === "INVITE") {
+                  setIsCallInitiator(false);
+                  setShowCallOverlay(true);
+                }
+                // Forward ALL call signals to the overlay
+                setCallSignal({ type: sigType, payload });
+              } catch (_e) {
+                /* ignore parse errors */
+              }
+              continue;
             }
+
+            // Regular chat message
+            const expiresAt = genExpiry(deleteMode);
+            newMsgs.push({
+              id: `p2p-${numIdx}`,
+              type: "text",
+              content: text,
+              sender: "ghost",
+              senderLabel: partnerId,
+              deleteMode,
+              createdAt: Date.now(),
+              expiresAt,
+              countdown: getCountdown(expiresAt),
+            });
           }
           if (newMsgs.length > 0) {
             setMessages((prev) => [...prev, ...newMsgs]);
             setMsgCount((c) => c + newMsgs.length);
           }
-          setLastMsgIndex(newIndex);
+          if (newIndex > currentIndex) {
+            setLastMsgIndex(newIndex);
+          }
         }
       } catch (_e) {
         // ignore poll errors
@@ -307,16 +346,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
     return () => {
       if (p2pPollRef.current) clearInterval(p2pPollRef.current);
     };
-  }, [
-    connectionMode,
-    actor,
-    roomCode,
-    myId,
-    partnerId,
-    lastMsgIndex,
-    deleteMode,
-    showCallOverlay,
-  ]);
+  }, [connectionMode, actor, roomCode, myId, partnerId, deleteMode]);
 
   // Auto scroll
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally trigger on msgCount
@@ -345,26 +375,38 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
     const code = `chatroom-${pw}`;
     setRoomCode(code);
     setConnectionMode("connecting");
-    setConnectingStatus("Oda oluşturuluyor...");
+    setConnectingStatus("Sunucuya bağlanılıyor...");
 
+    // Wait for actor to be ready — up to 10 seconds (mobile cold start)
+    let waitActor = 0;
+    while (!actor && waitActor < 20) {
+      await new Promise((r) => setTimeout(r, 500));
+      waitActor++;
+    }
     if (!actor) {
+      // Actor unavailable — fall back to solo mode silently
       setConnectionMode("solo");
       return;
     }
 
-    // Retry session creation up to 3 times
+    // Retry session creation up to 8 times with 1s delay (handles cold IC canister)
     let sessionId: string | null = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
       try {
-        sessionId = await actor.createSession("chat");
-        break;
+        const result = await actor.createSession("chat");
+        if (result && result.length > 0) {
+          sessionId = result;
+          break;
+        }
       } catch (_e) {
-        await new Promise((r) => setTimeout(r, 500));
+        // retry
       }
+      setConnectingStatus(`Oturum oluşturuluyor... (${attempt + 1}/8)`);
+      await new Promise((r) => setTimeout(r, 1000));
     }
     if (!sessionId) {
-      setPasswordError("Sunucuya bağlanılamadı — tekrar deneyin");
-      setConnectionMode("setup");
+      // All retries exhausted — fall back to solo/offline mode
+      setConnectionMode("solo");
       return;
     }
     sessionIdRef.current = sessionId;
@@ -1427,7 +1469,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
         )}
       </AnimatePresence>
 
-      {/* Ghost Call Overlay */}
+      {/* Ghost Call Overlay — signals come via incomingSignal prop, no independent polling */}
       {showCallOverlay && (
         <GhostCallOverlay
           isOpen={showCallOverlay}
@@ -1439,6 +1481,15 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
           sessionId={sessionIdRef.current}
           isInitiator={isCallInitiator}
           isGroup={true}
+          incomingSignal={callSignal}
+          onSignalSend={async (type, payload) => {
+            if (!actor || !roomCode) return;
+            await actor.sendGroupMessage(
+              roomCode,
+              sessionIdRef.current,
+              `__CALL__:${type}:${JSON.stringify(payload)}`,
+            );
+          }}
         />
       )}
     </div>

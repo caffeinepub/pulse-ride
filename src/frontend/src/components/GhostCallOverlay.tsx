@@ -12,6 +12,10 @@ export interface GhostCallOverlayProps {
   myId?: string;
   sessionId?: string;
   isInitiator?: boolean;
+  /** GhostChatPage passes signals here instead of overlay polling independently */
+  incomingSignal?: { type: string; payload: unknown } | null;
+  /** GhostChatPage provides this so signals go through a single channel */
+  onSignalSend?: (type: string, payload: unknown) => Promise<void>;
 }
 
 const VOICE_STYLES = ["MALE", "FEMALE", "NEUTRAL", "SYNTHETIC"] as const;
@@ -142,6 +146,8 @@ export default function GhostCallOverlay({
   myId,
   sessionId,
   isInitiator = false,
+  incomingSignal,
+  onSignalSend,
 }: GhostCallOverlayProps) {
   const [voiceStyle, setVoiceStyle] = useState<VoiceStyle>("SYNTHETIC");
   const [isMuted, setIsMuted] = useState(false);
@@ -172,11 +178,10 @@ export default function GhostCallOverlay({
   const isMutedRef = useRef(false);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
-  const sigPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const sigIndexRef = useRef<bigint>(BigInt(0));
-  const processedSigIds = useRef<Set<string>>(new Set());
   const ringCtxRef = useRef<AudioContext | null>(null);
   const muteTracksRef = useRef<MediaStreamTrack[]>([]);
+  // Buffer ICE candidates received before remote description is set
+  const iceCandidateBufferRef = useRef<RTCIceCandidateInit[]>([]);
 
   useEffect(() => {
     isMutedRef.current = isMuted;
@@ -208,8 +213,17 @@ export default function GhostCallOverlay({
     loop();
   };
 
-  // Send signaling message via backend
+  // Send signaling message — delegates to onSignalSend if provided
   const sendSignal = async (type: string, payload: unknown) => {
+    if (onSignalSend) {
+      try {
+        await onSignalSend(type, payload);
+      } catch (_e) {
+        /* ignore */
+      }
+      return;
+    }
+    // Fallback: direct backend call (used when overlay is standalone)
     if (!actor || !channelCode || !myId) return;
     const msg = `__CALL__:${type}:${JSON.stringify(payload)}`;
     try {
@@ -221,6 +235,20 @@ export default function GhostCallOverlay({
       }
     } catch (_e) {
       /* ignore */
+    }
+  };
+
+  // Apply buffered ICE candidates once remote description is available
+  const flushIceBuffer = async (pc: RTCPeerConnection) => {
+    while (iceCandidateBufferRef.current.length > 0) {
+      const candidate = iceCandidateBufferRef.current.shift();
+      if (candidate) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (_e) {
+          /* ignore */
+        }
+      }
     }
   };
 
@@ -269,88 +297,61 @@ export default function GhostCallOverlay({
     return pc;
   };
 
-  // Start signaling polling
-  const startSignalingPoll = (pc: RTCPeerConnection) => {
-    if (!actor || !channelCode || !myId) return;
-
-    sigPollRef.current = setInterval(async () => {
-      try {
-        let msgs: Array<[string, string, bigint]>;
-        const backendSid = sessionId || myId || "";
-        if (isGroup) {
-          msgs = await actor.getGroupMessages(
-            channelCode,
-            backendSid,
-            sigIndexRef.current,
+  // Process a signaling message (used by incomingSignal effect)
+  const processSignal = async (sigType: string, payload: unknown) => {
+    const pc = pcRef.current;
+    if (!pc) return;
+    try {
+      if (sigType === "INVITE" && !isInitiator) {
+        setCallPhase("incoming");
+      } else if (sigType === "ACCEPTED" && isInitiator) {
+        setCallPhase("active");
+        await startActiveCall(pc);
+      } else if (sigType === "REJECTED" && isInitiator) {
+        handleClose();
+      } else if (sigType === "OFFER" && !isInitiator) {
+        // Only accept OFFER when in a stable or safe state
+        if (
+          pc.signalingState === "stable" ||
+          pc.signalingState === "have-local-pranswer"
+        ) {
+          await pc.setRemoteDescription(
+            new RTCSessionDescription(payload as RTCSessionDescriptionInit),
           );
+          await flushIceBuffer(pc);
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          await sendSignal("ANSWER", answer);
+          setRtcStatus("signaling");
+        }
+      } else if (sigType === "ANSWER" && isInitiator) {
+        if (pc.signalingState !== "stable") {
+          await pc.setRemoteDescription(
+            new RTCSessionDescription(payload as RTCSessionDescriptionInit),
+          );
+          await flushIceBuffer(pc);
+        }
+      } else if (sigType === "ICE") {
+        const candidate = payload as RTCIceCandidateInit;
+        if (pc.remoteDescription) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
         } else {
-          msgs = await actor.getGhostMessages(
-            channelCode,
-            backendSid,
-            sigIndexRef.current,
-          );
+          // Buffer until remote description is set
+          iceCandidateBufferRef.current.push(candidate);
         }
-
-        for (const [senderId, text, idx] of msgs) {
-          const msgKey = `${senderId}-${idx}`;
-          if (senderId === myId) {
-            if (Number(idx) + 1 > Number(sigIndexRef.current))
-              sigIndexRef.current = BigInt(Number(idx) + 1);
-            continue;
-          }
-          if (processedSigIds.current.has(msgKey)) continue;
-          if (!text.startsWith("__CALL__:")) {
-            if (Number(idx) + 1 > Number(sigIndexRef.current))
-              sigIndexRef.current = BigInt(Number(idx) + 1);
-            continue;
-          }
-
-          processedSigIds.current.add(msgKey);
-          if (Number(idx) + 1 > Number(sigIndexRef.current))
-            sigIndexRef.current = BigInt(Number(idx) + 1);
-
-          const parts = text.slice("__CALL__:".length).split(":");
-          const sigType = parts[0];
-          const payloadStr = parts.slice(1).join(":");
-
-          try {
-            const payload = JSON.parse(payloadStr);
-
-            if (sigType === "INVITE" && !isInitiator) {
-              // Incoming call signal - already showing incoming UI, just confirm
-              setCallPhase("incoming");
-            } else if (sigType === "ACCEPTED" && isInitiator) {
-              // Other party accepted - start audio and WebRTC
-              setCallPhase("active");
-              await startActiveCall(pc);
-            } else if (sigType === "REJECTED" && isInitiator) {
-              handleClose();
-            } else if (sigType === "OFFER" && !isInitiator) {
-              await pc.setRemoteDescription(new RTCSessionDescription(payload));
-              const answer = await pc.createAnswer();
-              await pc.setLocalDescription(answer);
-              await sendSignal("ANSWER", answer);
-              setRtcStatus("signaling");
-            } else if (sigType === "ANSWER" && isInitiator) {
-              if (pc.signalingState !== "stable") {
-                await pc.setRemoteDescription(
-                  new RTCSessionDescription(payload),
-                );
-              }
-            } else if (sigType === "ICE") {
-              if (pc.remoteDescription) {
-                await pc.addIceCandidate(new RTCIceCandidate(payload));
-              }
-            }
-          } catch (_e) {
-            /* ignore parse/webrtc errors */
-          }
-        }
-      } catch (_e) {
-        /* ignore poll errors */
       }
-    }, 800);
+    } catch (_e) {
+      /* ignore webrtc errors */
+    }
   };
+
+  // React to incomingSignal prop — GhostChatPage pushes signals here
+  // biome-ignore lint/correctness/useExhaustiveDependencies: processSignal is intentionally excluded
+  useEffect(() => {
+    if (!incomingSignal || !isOpen) return;
+    processSignal(incomingSignal.type, incomingSignal.payload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incomingSignal, isInitiator]);
 
   // Start active call (after accept)
   const startActiveCall = async (pc: RTCPeerConnection) => {
@@ -394,9 +395,9 @@ export default function GhostCallOverlay({
       setMicPermission("granted");
 
       if (actor && channelCode && myId) {
-        const pc = setupPeerConnection(processedStream);
+        setupPeerConnection(processedStream);
         setRtcStatus("signaling");
-        startSignalingPoll(pc);
+        // NOTE: No startSignalingPoll — signals come via incomingSignal prop
       }
     } catch {
       setMicPermission("denied");
@@ -414,10 +415,6 @@ export default function GhostCallOverlay({
   // Stop all audio and WebRTC
   const stopAudio = () => {
     stopRingTone();
-    if (sigPollRef.current) {
-      clearInterval(sigPollRef.current);
-      sigPollRef.current = null;
-    }
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
@@ -449,8 +446,7 @@ export default function GhostCallOverlay({
     processedStreamRef.current = null;
     analyserRef.current = null;
     muteTracksRef.current = [];
-    processedSigIds.current.clear();
-    sigIndexRef.current = BigInt(0);
+    iceCandidateBufferRef.current = [];
     setBarHeights(Array(BAR_COUNT).fill(4));
     setMicPermission("pending");
     setRtcStatus("idle");
@@ -467,7 +463,7 @@ export default function GhostCallOverlay({
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
     if (audioCtxRef.current) playConnectTone(audioCtxRef.current);
-    // Non-initiator: wait for initiator's OFFER via signaling poll (do NOT send OFFER here)
+    // Non-initiator: wait for initiator's OFFER via incomingSignal prop
   };
 
   // Reject incoming call
@@ -520,6 +516,7 @@ export default function GhostCallOverlay({
       setElapsed(0);
       setIsMuted(false);
       isMutedRef.current = false;
+      iceCandidateBufferRef.current = [];
       setCallPhase(isInitiator ? "calling" : "incoming");
       startAudio();
 
@@ -553,7 +550,6 @@ export default function GhostCallOverlay({
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      if (sigPollRef.current) clearInterval(sigPollRef.current);
       if (timerRef.current) clearInterval(timerRef.current);
       if (pcRef.current) pcRef.current.close();
       if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
