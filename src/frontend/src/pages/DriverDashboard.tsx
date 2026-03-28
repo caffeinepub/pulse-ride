@@ -290,11 +290,12 @@ export default function DriverDashboard({
   const handleCompleteRide = useCallback(async () => {
     if (!actor || !activeRide) return;
     try {
-      await actor.updateRideStatus(
+      const ok = await actor.updateRideStatus(
         activeRide.rideId,
         backendSessionId,
-        "completed",
+        "driver_completing",
       );
+      if (!ok) throw new Error("failed");
       setShowRating(true);
     } catch {
       toast.error("Yolculuk tamamlanamadı");
@@ -914,7 +915,7 @@ export default function DriverDashboard({
             {showGhostChat && activeRide && (
               <InRideGhostChat
                 rideId={activeRide.rideId}
-                mySessionId={session.sessionId}
+                mySessionId={backendSessionId}
                 userRole="driver"
                 onClose={() => setShowGhostChat(false)}
               />

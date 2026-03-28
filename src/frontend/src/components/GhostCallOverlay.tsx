@@ -143,6 +143,7 @@ export default function GhostCallOverlay({
 }: GhostCallOverlayProps) {
   const [voiceStyle, setVoiceStyle] = useState<VoiceStyle>("SYNTHETIC");
   const [isMuted, setIsMuted] = useState(false);
+  const [isSpeaker, setIsSpeaker] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [micPermission, setMicPermission] = useState<
     "pending" | "granted" | "denied"
@@ -392,11 +393,6 @@ export default function GhostCallOverlay({
         const pc = setupPeerConnection(processedStream);
         setRtcStatus("signaling");
         startSignalingPoll(pc);
-
-        if (isInitiator) {
-          // Send INVITE signal so other party knows call is coming
-          await sendSignal("INVITE", { callerId: myId });
-        }
       }
     } catch {
       setMicPermission("denied");
@@ -1068,6 +1064,35 @@ export default function GhostCallOverlay({
                 }}
               >
                 {isMuted ? "🔇" : "🎤"}
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  const newSpeaker = !isSpeaker;
+                  setIsSpeaker(newSpeaker);
+                  if (remoteAudioRef.current) {
+                    try {
+                      await (remoteAudioRef.current as any).setSinkId?.(
+                        newSpeaker ? "default" : "",
+                      );
+                    } catch (_e) {
+                      /* not supported */
+                    }
+                  }
+                }}
+                className="w-14 h-14 rounded-full flex items-center justify-center text-xl transition-all"
+                style={{
+                  background: isSpeaker
+                    ? "rgba(0,255,136,0.2)"
+                    : "rgba(0,255,247,0.08)",
+                  border: isSpeaker
+                    ? "1.5px solid rgba(0,255,136,0.6)"
+                    : "1.5px solid rgba(0,255,247,0.3)",
+                }}
+                title={isSpeaker ? "Hoparlör" : "Kulaklık"}
+              >
+                {isSpeaker ? "🔊" : "🔈"}
               </button>
 
               <button

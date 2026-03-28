@@ -161,7 +161,8 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
   const [showCallOverlay, setShowCallOverlay] = useState(false);
-  const [isCreator, setIsCreator] = useState(false);
+  const [_isCreator, setIsCreator] = useState(false);
+  const [isCallInitiator, setIsCallInitiator] = useState(false);
   const [ended, setEnded] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [msgCount, setMsgCount] = useState(0);
@@ -180,6 +181,8 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
   // connectPollRef: only for connection establishment polling
   const connectPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // sessionIdRef: persists the valid backend session ID across closures
+  const sessionIdRef = useRef<string>(myId);
 
   const photoRef = useRef<HTMLInputElement>(null);
   const docRef = useRef<HTMLInputElement>(null);
@@ -253,7 +256,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
       try {
         const msgs = await actor.getGroupMessages(
           roomCode,
-          myId,
+          sessionIdRef.current,
           BigInt(lastMsgIndex),
         );
         if (msgs.length > 0) {
@@ -287,7 +290,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
               text.startsWith("__CALL__:INVITE:") &&
               !showCallOverlay
             ) {
-              setIsCreator(false);
+              setIsCallInitiator(false);
               setShowCallOverlay(true);
             }
           }
@@ -349,9 +352,26 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
       return;
     }
 
+    // Retry session creation up to 3 times
+    let sessionId: string | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        sessionId = await actor.createSession("chat");
+        break;
+      } catch (_e) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+    if (!sessionId) {
+      setPasswordError("Sunucuya bağlanılamadı — tekrar deneyin");
+      setConnectionMode("setup");
+      return;
+    }
+    sessionIdRef.current = sessionId;
+
     try {
       // Try to create channel — returns true if successfully created (we are first)
-      const created = await actor.createGroupChannel(code, myId);
+      const created = await actor.createGroupChannel(code, sessionId);
       if (created) {
         setIsCreator(true);
         setConnectingStatus("Oda oluşturuldu. Partner bekleniyor...");
@@ -361,7 +381,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
           if (waited > 120) {
             clearInterval(poll);
             try {
-              await actor.leaveGroupChannel(code, myId);
+              await actor.leaveGroupChannel(code, sessionIdRef.current);
             } catch (_e) {
               /* ignore */
             }
@@ -370,7 +390,10 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
             return;
           }
           try {
-            const members = await actor.listGroupMembers(code, myId);
+            const members = await actor.listGroupMembers(
+              code,
+              sessionIdRef.current,
+            );
             if (members.length >= 2) {
               clearInterval(poll);
               setConnectionMode("p2p");
@@ -384,7 +407,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
       } else {
         // Channel exists — try to join as second user
         setConnectingStatus("Odaya katılınıyor...");
-        const result = await actor.joinGroupChannel(code, myId);
+        const result = await actor.joinGroupChannel(code, sessionId);
         const memberCount = Number.parseInt(result);
         if (
           result === "connected" ||
@@ -404,7 +427,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
             if (waited > 60) {
               clearInterval(poll);
               try {
-                await actor.leaveGroupChannel(code, myId);
+                await actor.leaveGroupChannel(code, sessionIdRef.current);
               } catch (_e) {
                 /* ignore */
               }
@@ -413,7 +436,10 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
               return;
             }
             try {
-              const members = await actor.listGroupMembers(code, myId);
+              const members = await actor.listGroupMembers(
+                code,
+                sessionIdRef.current,
+              );
               if (members.length >= 2) {
                 clearInterval(poll);
                 setConnectionMode("p2p");
@@ -431,7 +457,10 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
           // "not_found" or unknown — become creator
           setConnectingStatus("Yeni oda oluşturuluyor...");
           try {
-            const freshCreated = await actor.createGroupChannel(code, myId);
+            const freshCreated = await actor.createGroupChannel(
+              code,
+              sessionIdRef.current,
+            );
             if (freshCreated) {
               setIsCreator(true);
               setConnectingStatus("Oda oluşturuldu. Partner bekleniyor...");
@@ -441,7 +470,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
                 if (waited > 120) {
                   clearInterval(poll);
                   try {
-                    await actor.leaveGroupChannel(code, myId);
+                    await actor.leaveGroupChannel(code, sessionIdRef.current);
                   } catch (_e) {
                     /* ignore */
                   }
@@ -450,7 +479,10 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
                   return;
                 }
                 try {
-                  const members = await actor.listGroupMembers(code, myId);
+                  const members = await actor.listGroupMembers(
+                    code,
+                    sessionIdRef.current,
+                  );
                   if (members.length >= 2) {
                     clearInterval(poll);
                     setConnectionMode("p2p");
@@ -463,7 +495,10 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
               connectPollRef.current = poll;
             } else {
               // Someone else just created it, join again
-              const r2 = await actor.joinGroupChannel(code, myId);
+              const r2 = await actor.joinGroupChannel(
+                code,
+                sessionIdRef.current,
+              );
               const r2Count = Number.parseInt(r2);
               if (
                 r2 === "connected" ||
@@ -525,7 +560,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
         overrideType !== "location"
       ) {
         try {
-          await actor.sendGroupMessage(roomCode, myId, content);
+          await actor.sendGroupMessage(roomCode, sessionIdRef.current, content);
         } catch (_e) {
           /* ignore */
         }
@@ -573,7 +608,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
   const handleEndSession = async () => {
     if (connectionMode === "p2p" && actor && roomCode) {
       try {
-        await actor.leaveGroupChannel(roomCode, myId);
+        await actor.leaveGroupChannel(roomCode, sessionIdRef.current);
       } catch (_e) {
         /* ignore */
       }
@@ -913,7 +948,21 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
           </div>
           <button
             type="button"
-            onClick={() => setShowCallOverlay(true)}
+            onClick={async () => {
+              if (actor && roomCode) {
+                try {
+                  await actor.sendGroupMessage(
+                    roomCode,
+                    sessionIdRef.current,
+                    `__CALL__:INVITE:${JSON.stringify({ callerId: myId })}`,
+                  );
+                } catch (_e) {
+                  /* ignore */
+                }
+              }
+              setIsCallInitiator(true);
+              setShowCallOverlay(true);
+            }}
             className="w-8 h-8 rounded-full flex items-center justify-center transition-all"
             style={{
               background: "rgba(0,255,136,0.08)",
@@ -1387,7 +1436,7 @@ export default function GhostChatPage({ onBack }: GhostChatPageProps) {
           actor={actor}
           channelCode={roomCode}
           myId={myId}
-          isInitiator={isCreator}
+          isInitiator={isCallInitiator}
         />
       )}
     </div>

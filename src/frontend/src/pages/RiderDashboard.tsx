@@ -273,7 +273,9 @@ export default function RiderDashboard({
             pollingRef.current = null;
           }
         }
-      } catch {}
+      } catch (e) {
+        console.error("getRideStatus error:", e);
+      }
     }, 3000);
     return () => {
       if (pollingRef.current) {
@@ -400,7 +402,9 @@ export default function RiderDashboard({
         setRideId(rid);
         setSessionCode(code);
         // Immediately approve and go to searching
-        await actor.approveRide(rid, session.sessionId);
+        const approved1 = await actor.approveRide(rid, session.sessionId);
+        if (!approved1)
+          throw new Error("Yolculuk onaylanamadı — lütfen tekrar deneyin");
         setRideStatus("searching");
         toast.success("Sürücü aranıyor — anonim eşleşme aktif...");
       } catch {
@@ -480,7 +484,9 @@ export default function RiderDashboard({
     if (!actor || !rideId) return;
     setApproving(true);
     try {
-      await actor.approveRide(rideId, session.sessionId);
+      const approved2 = await actor.approveRide(rideId, session.sessionId);
+      if (!approved2)
+        throw new Error("Yolculuk onaylanamadı — lütfen tekrar deneyin");
       setRideStatus("searching");
       toast.success("Yolculuk onaylandı — anonim sürücü aranıyor...");
     } catch {
